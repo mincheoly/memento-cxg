@@ -56,26 +56,37 @@ if __name__ == "__main__":
         var_df['feature_id'] = var_df['feature_id'].astype('category')
         obs_df['dataset_id'] = obs_df['dataset_id'].astype('category')
         obs_df['cell_type'] = obs_df['cell_type'].astype('category')
-        obs_df['approx_size_factor'] = 0
+        obs_df['size_factor'] = 0
+
+        print(f"Pass 1: Compute Approx Size Factors")
 
         for X_tbl in query.X("raw").tables():
-            print(f"Pass 1: processing X batch size={X_tbl.shape[0]}")
+            print(f"Pass 1: Processing X batch size={X_tbl.shape[0]}")
             X_df = X_tbl.to_pandas()
 
-            # Sum expression levels for each cell, then bin all sums to have fewer unique values
-            cell_sums = X_df.groupby('soma_dim_0', sort=False).\
+            # Sum expression levels for each cell
+            cell_sums = (
+                X_df.groupby('soma_dim_0', sort=False).
                 aggregate(sum=pd.NamedAgg("soma_data", "sum"))
-            obs_df['approx_size_factor'] = obs_df['approx_size_factor'].add(bin_size_factor(cell_sums['sum'].values))
+            )
+
+            # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
+            obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums['sum'])
+
+        # Bin all sums to have fewer unique values, to speed up bootstrap computation
+        obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
+
+        print(f"Pass 2: Compute Estimators")
 
         # accumulate into feature_id/cell_type/dataset_id Pandas multi-indexed DataFrame
-        cube_index = pd.MultiIndex.from_arrays([[]] * 3, names=['feature_id'] + cube_dims_obs)
-        cube = pd.DataFrame(index=cube_index, columns=estimator_names)
+        # cube_index = pd.MultiIndex.from_arrays([[]] * 3, names=['feature_id'] + cube_dims_obs)
+        # cube = pd.DataFrame(index=cube_index, columns=estimator_names)
         estimators = {}
 
-        # partition
+        # Process X by cube rows
         X: somacore.SparseNDArray = query.experiment.ms['RNA'].X['raw']
-        cube_obs_coords = obs_df[cube_dims_obs].groupby(cube_dims_obs).groups
-        for group_key, soma_dim_0_batch in cube_obs_coords.items():
+        cube_coords = obs_df[cube_dims_obs].groupby(cube_dims_obs).groups
+        for group_key, soma_dim_0_batch in cube_coords.items():
             X_df = X.read(coords=(soma_dim_0_batch.to_numpy(),)).tables().concat().to_pandas()
 
             print(f"Pass 2: processing X batch size={X_df.shape[0]}, cells={X_df['soma_dim_0'].nunique()}")
