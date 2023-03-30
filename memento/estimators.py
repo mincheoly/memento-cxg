@@ -1,9 +1,6 @@
+import numpy as np
 import scipy.sparse as sparse
 import scipy.stats as stats
-import scipy.interpolate as inter
-import numpy as np
-from anndata import AnnData
-from typing import Union
 
 
 def bin_size_factor(size_factor, num_bins=30):
@@ -21,13 +18,15 @@ def bin_size_factor(size_factor, num_bins=30):
 def fill_invalid(val):
 	""" Fill invalid entries by randomly selecting a valid entry. """
 	
-	condition = np.less_equal(val, 0., where=~np.isnan(val)) | np.isnan(val)
-	num_invalid = condition.sum()
+	invalid_mask = np.less_equal(val, 0., where=~np.isnan(val)) | np.isnan(val)
+	num_invalid = invalid_mask.sum()
 	
 	if num_invalid == val.shape[0]:
-		return None
-	
-	val[condition] = np.random.choice(val[~condition], num_invalid)
+		# TODO: Returning None causes failure. What does it mean when all values are invalid and how should this be handled?
+		return np.zeros(shape=val.shape)
+		# return None
+
+	val[invalid_mask] = np.random.choice(val[~invalid_mask], num_invalid)
 	
 	return val
 
@@ -45,10 +44,14 @@ def unique_expr(expr, size_factor):
 	code += np.random.random()*approx_sf
 	
 	_, index, count = np.unique(code, return_index=True, return_counts=True)
-    
 	expr_to_return = expr[index].toarray()
 	
-	return 1/approx_sf[index].reshape(-1, 1), 1/approx_sf[index].reshape(-1, 1)**2, expr_to_return, count
+	return (
+		1/approx_sf[index].reshape(-1, 1),
+		1/approx_sf[index].reshape(-1, 1)**2,
+		expr_to_return,
+		count
+	)
 
 
 def compute_mean(
@@ -92,7 +95,8 @@ def compute_variance(
 	row_weight_sq = (1/size_factor**2).reshape([1, -1])
 	
 	mm_M1 = sparse.csc_matrix.dot(row_weight, X).ravel()/n_obs
-	mm_M2 = sparse.csc_matrix.dot(row_weight_sq, X.power(2)).ravel()/n_obs - (1-q)*sparse.csc_matrix.dot(row_weight_sq, X).ravel()/n_obs
+	mm_M2 = sparse.csc_matrix.dot(row_weight_sq, X.power(2)).ravel()/n_obs - \
+			(1-q)*sparse.csc_matrix.dot(row_weight_sq, X).ravel()/n_obs
 	
 	mean = mm_M1
 	variance = (mm_M2 - mm_M1**2)
@@ -129,7 +133,7 @@ def compute_sev(
 	
 	n_obs = X.shape[0]
 	inv_sf, inv_sf_sq, expr, counts = unique_expr(X, approx_size_factor)
-	
+
 	gen = np.random.Generator(np.random.PCG64(5))
 	gene_rvs = gen.multinomial(n_obs, counts/counts.sum(), size=num_boot).T
 	
