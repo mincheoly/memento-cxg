@@ -54,28 +54,27 @@ def unique_expr(expr, size_factor):
 def compute_mean(
 	X: sparse.csc_matrix,
 	q: float,
+	sample_mean,
+	variance,
 	size_factor: np.array
 ):
 	""" Inverse variance weighted mean. """
-	
-	norm_X = X.multiply(1/size_factor.reshape(-1,1))
-		
-	sample_mean, variance = compute_variance(X, q, size_factor)
+
 	cell_variance = (1-q)/size_factor*sample_mean + variance
-	
-	mean = np.average(norm_X.todense().A1, weights=cell_variance)
+
+	norm_X = X.multiply(1/size_factor.reshape(-1, 1))
+	# TODO: OK to us np.ma methods?
+	mean = np.ma.average(norm_X.todense().A1, weights=cell_variance)
 
 	return mean
 
 
 def compute_sem(
 	X: sparse.csc_matrix,
-	q: float,
-	size_factor: np.array,
+	variance
 ):
 	""" Approximate standard error of the mean. """
 	
-	sample_mean, variance = compute_variance(X, q, size_factor)
 	sem = np.sqrt(variance/X.shape[0])
 	
 	return sem
@@ -143,10 +142,9 @@ def compute_sev(
 		inverse_size_factor_sq=inv_sf_sq
 	)
 
-	mean = fill_invalid(mean)
 	var = fill_invalid(var)
 
-	sem, sev = np.nanstd(mean), np.nanstd(var)
-	selm, selv = np.nanstd(np.log(mean)), np.nanstd(np.log(var))
-	
-	return sem, selm, sev, selv
+	sev = np.nanstd(var)
+	selv = np.nanstd(np.log(var))
+
+	return sev, selv
