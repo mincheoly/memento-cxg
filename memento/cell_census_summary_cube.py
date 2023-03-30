@@ -41,6 +41,21 @@ def batched(iterable, n):
         yield batch
 
 
+def compute_estimators_for_batch(soma_dim_0):
+    X_df = X.read(coords=(soma_dim_0,
+                          query.var_joinids())).tables().concat().to_pandas()
+    print(f"Pass 2: Processing X batch cells={len(soma_dim_0)}, nnz={len(X_df)}")
+    # Compute estimators for each gene
+    return (
+        X_df.merge(var_df['feature_id'], left_on='soma_dim_1', right_index=True).
+        merge(obs_df[cube_dims_obs + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
+        drop(columns=['soma_dim_0', 'soma_dim_1']).
+        groupby(cube_dims_obs + ['feature_id'], sort=False).
+        apply(compute_all_estimators).
+        rename(mapper=dict(enumerate(estimator_names)), axis=1)
+    )
+
+
 if __name__ == "__main__":
     census_soma = cell_census.open_soma(uri=sys.argv[1] if len(sys.argv) > 1 else None)
 
@@ -50,8 +65,8 @@ if __name__ == "__main__":
 
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
-                             obs_query=AxisQuery(value_filter="cell_type=='plasma cell'"),
-                             var_query=AxisQuery(coords=(slice(0, 1000),))) as query:
+                             obs_query=AxisQuery(),  #value_filter="cell_type=='plasma cell'"),
+                             var_query=AxisQuery(coords=(slice(0, 10000),))) as query:
         var_df = query.var().concat().to_pandas().set_index("soma_joinid")
         var_df['feature_id'] = var_df['feature_id'].astype('category')
 
@@ -68,7 +83,7 @@ if __name__ == "__main__":
         print(f"Pass 1: Compute Approx Size Factors")
 
         for X_tbl in query.X("raw").tables():
-            print(f"Pass 1: Processing X batch cells={X_tbl.shape[0]}")
+            print(f"Pass 1: Processing X batch nnz={X_tbl.shape[0]}")
             X_df = X_tbl.to_pandas()
 
             # Sum all gene expression levels for each cell
@@ -86,29 +101,25 @@ if __name__ == "__main__":
         cube_index = pd.MultiIndex.from_arrays([[]] * 3, names=cube_dims_obs + ['feature_id'])
         cube = pd.DataFrame(index=cube_index, columns=estimator_names)
 
-        # Process X by cube rows
+        # Process X by cube rows. This ensures that estimators are computed
+        # for all X data contributing to a given cube row aggregation.
         X: somacore.SparseNDArray = query.experiment.ms['RNA'].X['raw']
         # TODO: `groups` converts categoricals to strs, which is inefficient
         cube_coords = obs_df[cube_dims_obs].groupby(cube_dims_obs).groups
-        # TODO: Process multiple cube rows at once, to reduce X.read() call count
-        # TODO: Parallelize
-        for group_key, soma_dim_0_batch in cube_coords.items():
-            X_df = X.read(coords=(soma_dim_0_batch.to_numpy(),
-                                  query.var_joinids())).tables().concat().to_pandas()
+        soma_dim_0_batch = []
 
-            print(f"Pass 2: Processing X batch nnz={X_df.shape[0]}, cells={X_df['soma_dim_0'].nunique()}")
+        for group_key, soma_dim_0_row in cube_coords.items():
+            # Fetch data for multiple cube rows at once, to reduce X.read() call count
+            if len(soma_dim_0_batch) < 10000:
+                soma_dim_0_batch.extend(soma_dim_0_row)
+                continue
 
-            # Compute estimators for each gene
-            cube_batch_result = (
-                X_df.merge(var_df['feature_id'], left_on='soma_dim_1', right_index=True).
-                merge(obs_df[cube_dims_obs + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
-                drop(columns=['soma_dim_0', 'soma_dim_1']).
-                groupby(cube_dims_obs + ['feature_id'], sort=False).
-                apply(compute_all_estimators).
-                rename(mapper=dict(enumerate(estimator_names)), axis=1)
-            )
-            cube = pd.concat([cube, cube_batch_result])
+            # TODO: Parallelize
+            cube = cube.append(compute_estimators_for_batch(soma_dim_0_batch))
+            soma_dim_0_batch = []
 
+        # Process final batch
+        cube = cube.append(compute_estimators_for_batch(soma_dim_0_batch))
         # TODO: Write to disk (e.g. as TileDB Array)
         print(cube)
 
