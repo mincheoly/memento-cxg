@@ -6,6 +6,7 @@ from concurrent import futures
 
 import cell_census
 import pandas as pd
+import pyarrow as pa
 import scipy.sparse
 import scipy.sparse
 import tiledbsoma as soma
@@ -13,7 +14,8 @@ from somacore import ExperimentAxisQuery, AxisQuery
 
 from estimators import compute_mean, compute_sem, bin_size_factor, compute_variance, compute_sev
 
-MIN_BATCH_SIZE = 1000
+# The minimum number of X values that should be processed at a time by each child process.
+MIN_BATCH_SIZE = 10000
 
 CUBE_DIMS_OBS = [
     "cell_type",
@@ -21,7 +23,7 @@ CUBE_DIMS_OBS = [
 ]
 CUBE_DIMS = ['feature_id'] + CUBE_DIMS_OBS
 
-ESTIMATOR_NAMES = ['n', 'mean', 'sem', 'var', 'sev', 'selv']
+ESTIMATOR_NAMES = ['n', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
 Q = 0.1  # RNA capture efficiency depending on technology
 
@@ -34,6 +36,10 @@ logging.basicConfig(
 )
 logging.captureWarnings(True)
 
+pd.options.display.max_columns = None
+pd.options.display.width = 1024
+pd.options.display.min_rows = 40
+
 
 def compute_all_estimators(grouped):
     # TODO: transpose() is correct?
@@ -41,12 +47,15 @@ def compute_all_estimators(grouped):
     approx_size_factor = grouped['approx_size_factor'].values
 
     n = X_single_gene.shape[0]  # sanity check; not required
+    min = X_single_gene.min()
+    max = X_single_gene.max()
+    sum = X_single_gene.sum()
     sample_mean, variance = compute_variance(X_single_gene, Q, approx_size_factor)
     mean = compute_mean(X_single_gene, Q, sample_mean, variance, approx_size_factor)
     sem = compute_sem(X_single_gene, variance)
     sev, selv = compute_sev(X_single_gene, Q, approx_size_factor, num_boot=10000)
 
-    return pd.Series(data=[n, mean, sem, variance, sev, selv])
+    return pd.Series(data=[n, min, max, sum, mean, sem, variance, sev, selv])
 
 
 def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str):
@@ -59,10 +68,10 @@ def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: p
             X_df.merge(var_df['feature_id'], left_on='soma_dim_1', right_index=True).
             merge(obs_df[CUBE_DIMS_OBS + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
             drop(columns=['soma_dim_0', 'soma_dim_1']).
-            groupby(CUBE_DIMS, sort=False).
+            groupby(CUBE_DIMS, observed=True, sort=False).
             apply(compute_all_estimators).
             rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
-        )
+            )
 
 
 def sum_gene_expression_levels_by_cell(X_tbl: pa.Table) -> pd.Series:
@@ -85,7 +94,7 @@ if __name__ == "__main__":
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
                              obs_query=AxisQuery(),  #value_filter="cell_type=='plasma cell'"),
-                             var_query=AxisQuery(coords=(slice(0, 10000),))) as query:
+                             var_query=AxisQuery(coords=(slice(0, 100),))) as query:
         var_df = query.var().concat().to_pandas().set_index("soma_joinid")
         var_df['feature_id'] = var_df['feature_id'].astype('category')
 
