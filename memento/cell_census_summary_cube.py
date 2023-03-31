@@ -103,7 +103,7 @@ if __name__ == "__main__":
             cell_sums = X_df[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()
 
             # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
-            obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums['soma_data'])
+            obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums['soma_data'], fill_value=0)
 
         # Bin all sums to have fewer unique values, to speed up bootstrap computation
         obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
