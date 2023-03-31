@@ -101,12 +101,12 @@ if __name__ == "__main__":
 
         logging.info(f"Pass 1: Compute Approx Size Factors")
 
-        futures = []
+        summing_futures = []
         for X_tbl in query.X("raw").tables():
             logging.info(f"Pass 1: Processing X batch nnz={X_tbl.shape[0]}")
-            futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
+            summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
 
-        for future in futures:
+        for future in futures.as_completed(summing_futures):
             # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
             cell_sums = future.result()
             obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
@@ -152,9 +152,11 @@ if __name__ == "__main__":
 
         for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
             result = future.result()
-            cube = cube.append(result, ignore_index=True)
+            print(result)
+            cube = cube.append(result)
             logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
 
         # TODO: Write to disk (e.g. as TileDB Array)
+
         print(cube)
 
