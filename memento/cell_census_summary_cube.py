@@ -65,8 +65,9 @@ def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: p
         )
 
 
-def no_op():
-    return pd.DataFrame(data=[[1] * len(ESTIMATOR_NAMES)], columns=ESTIMATOR_NAMES)
+def sum_gene_expression_levels_by_cell(X_tbl: pa.Table) -> pd.Series:
+    # TODO: use PyArrow API only; avoid Pandas conversion
+    return X_tbl.to_pandas()[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()['soma_data']
 
 
 if __name__ == "__main__":
@@ -76,10 +77,15 @@ if __name__ == "__main__":
 
     organism_census = census_soma["census_data"][organism_label]
 
+    # init multiprocessing
+    if multiprocessing.get_start_method(True) != "spawn":
+        multiprocessing.set_start_method("spawn", True)
+    ppe = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
+
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
                              obs_query=AxisQuery(),  #value_filter="cell_type=='plasma cell'"),
-                             var_query=AxisQuery(coords=(slice(0, 1000),))) as query:
+                             var_query=AxisQuery(coords=(slice(0, 10000),))) as query:
         var_df = query.var().concat().to_pandas().set_index("soma_joinid")
         var_df['feature_id'] = var_df['feature_id'].astype('category')
 
@@ -95,15 +101,15 @@ if __name__ == "__main__":
 
         logging.info(f"Pass 1: Compute Approx Size Factors")
 
+        futures = []
         for X_tbl in query.X("raw").tables():
             logging.info(f"Pass 1: Processing X batch nnz={X_tbl.shape[0]}")
-            X_df = X_tbl.to_pandas()
+            futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
 
-            # Sum all gene expression levels for each cell
-            cell_sums = X_df[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()
-
+        for future in futures:
             # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
-            obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums['soma_data'], fill_value=0)
+            cell_sums = future.result()
+            obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
 
         # Bin all sums to have fewer unique values, to speed up bootstrap computation
         obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
@@ -119,11 +125,6 @@ if __name__ == "__main__":
         # TODO: `groups` converts categoricals to strs, which is inefficient
         cube_coords = obs_df[CUBE_DIMS_OBS].groupby(CUBE_DIMS_OBS).groups
         soma_dim_0_batch = []
-
-        if multiprocessing.get_start_method(True) != "spawn":
-            multiprocessing.set_start_method("spawn", True)
-
-        ppe = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
 
         batch_futures = []
 
