@@ -19,6 +19,8 @@ from estimators import compute_mean, compute_sem, bin_size_factor, compute_varia
 
 OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
+TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
+
 # The minimum number of X values that should be processed at a time by each child process.
 MIN_BATCH_SIZE = 10000
 
@@ -170,7 +172,10 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
 
 
 if __name__ == "__main__":
-    census_soma = cell_census.open_soma(uri=sys.argv[1] if len(sys.argv) > 1 else None)
+    census_soma = cell_census.open_soma(uri=sys.argv[1] if len(sys.argv) > 1 else None,
+                                        context=soma.SOMATileDBContext().replace(tiledb_config={
+                                            "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})
+                                        )
 
     organism_label = sys.argv[2] if len(sys.argv) > 2 else list(census_soma["census_data"].keys())[0]
 
