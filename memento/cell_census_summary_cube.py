@@ -83,7 +83,9 @@ def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: p
             )
 
 
-def sum_gene_expression_levels_by_cell(X_tbl: pa.Table) -> pd.Series:
+def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, n: int) -> pd.Series:
+    logging.info(f"Pass 1: Computing X batch {n}, nnz={X_tbl.shape[0]}")
+
     # TODO: use PyArrow API only; avoid Pandas conversion
     return X_tbl.to_pandas()[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()['soma_data']
 
@@ -100,13 +102,13 @@ def pass_1_compute_size_factors(ppe: ProcessPoolExecutor, query: ExperimentAxisQ
     summing_futures = []
     for n, X_tbl in enumerate(query.X("raw").tables(), start=1):
         logging.info(f"Pass 1: Submitting X batch {n}, nnz={X_tbl.shape[0]}")
-        summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
+        summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl, n))
 
     for n, summing_future in enumerate(futures.as_completed(summing_futures), start=1):
         # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
         cell_sums = summing_future.result()
         obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
-        logging.info(f"Pass 2: Completed {n} of {len(summing_futures)} batches, "
+        logging.info(f"Pass 1: Completed {n} of {len(summing_futures)} batches, "
                      f"total cube rows={len(obs_df)}")
 
     # Bin all sums to have fewer unique values, to speed up bootstrap computation
