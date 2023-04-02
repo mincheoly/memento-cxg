@@ -179,7 +179,7 @@ if __name__ == "__main__":
 
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
-                             obs_query=AxisQuery(),  # value_filter="cell_type=='plasma cell'"),
+                             obs_query=AxisQuery(value_filter="is_primary_data == True"),  # value_filter="cell_type=='plasma cell'"),
                              var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
 
         logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
