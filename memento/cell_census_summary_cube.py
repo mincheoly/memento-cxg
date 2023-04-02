@@ -4,6 +4,7 @@ import multiprocessing
 import sys
 from concurrent import futures
 from concurrent.futures import ProcessPoolExecutor
+from typing import Optional
 
 import cell_census
 import pandas as pd
@@ -33,7 +34,7 @@ Q = 0.1  # RNA capture efficiency depending on technology
 
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
-GENE_COUNT = 100
+GENE_COUNT: Optional[int] = None
 
 logging.basicConfig(
     format="%(asctime)s %(process)-7s %(levelname)-8s %(message)s",
@@ -181,6 +182,7 @@ if __name__ == "__main__":
                              obs_query=AxisQuery(),  # value_filter="cell_type=='plasma cell'"),
                              var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
 
+        logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
 
         if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
             logging.info(f"Pass 1: Compute Approx Size Factors")
