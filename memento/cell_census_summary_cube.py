@@ -98,14 +98,16 @@ def pass_1_compute_size_factors(ppe: ProcessPoolExecutor, query: ExperimentAxisQ
     obs_df['size_factor'] = 0  # accumulated
 
     summing_futures = []
-    for X_tbl in query.X("raw").tables():
-        logging.info(f"Pass 1: Processing X batch nnz={X_tbl.shape[0]}")
+    for n, X_tbl in enumerate(query.X("raw").tables(), start=1):
+        logging.info(f"Pass 1: Submitting X batch {n}, nnz={X_tbl.shape[0]}")
         summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
 
-    for summing_future in futures.as_completed(summing_futures):
+    for n, summing_future in enumerate(futures.as_completed(summing_futures), start=1):
         # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
         cell_sums = summing_future.result()
         obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
+        logging.info(f"Pass 2: Completed {n} of {len(summing_futures)} batches, "
+                     f"total cube rows={len(obs_df)}")
 
     # Bin all sums to have fewer unique values, to speed up bootstrap computation
     obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
