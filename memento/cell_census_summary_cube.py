@@ -89,7 +89,11 @@ def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, n: int) -> pd.Series:
     logging.info(f"Pass 1: Computing X batch {n}, nnz={X_tbl.shape[0]}")
 
     # TODO: use PyArrow API only; avoid Pandas conversion
-    return X_tbl.to_pandas()[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()['soma_data']
+    result = X_tbl.to_pandas()[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()['soma_data']
+
+    logging.info(f"Pass 1: Computing X batch {n}, nnz={X_tbl.shape[0]}: done")
+
+    return result
 
 
 def pass_1_compute_size_factors(ppe: ProcessPoolExecutor, query: ExperimentAxisQuery) -> pd.DataFrame:
