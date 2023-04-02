@@ -3,16 +3,20 @@ import logging
 import multiprocessing
 import sys
 from concurrent import futures
+from concurrent.futures import ProcessPoolExecutor
 
 import cell_census
 import pandas as pd
 import pyarrow as pa
 import scipy.sparse
 import scipy.sparse
+import tiledb
 import tiledbsoma as soma
 from somacore import ExperimentAxisQuery, AxisQuery
 
 from estimators import compute_mean, compute_sem, bin_size_factor, compute_variance, compute_sev
+
+OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
 # The minimum number of X values that should be processed at a time by each child process.
 MIN_BATCH_SIZE = 10000
@@ -79,6 +83,77 @@ def sum_gene_expression_levels_by_cell(X_tbl: pa.Table) -> pd.Series:
     return X_tbl.to_pandas()[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()['soma_data']
 
 
+def pass_1_compute_size_factors(ppe: ProcessPoolExecutor, query: ExperimentAxisQuery) -> pd.DataFrame:
+    obs_df = (
+        query.obs(column_names=["soma_joinid"] + CUBE_DIMS_OBS).
+        concat().
+        to_pandas().
+        set_index("soma_joinid")
+    )
+    obs_df['size_factor'] = 0  # accumulated
+
+    summing_futures = []
+    for X_tbl in query.X("raw").tables():
+        logging.info(f"Pass 1: Processing X batch nnz={X_tbl.shape[0]}")
+        summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
+
+    for summing_future in futures.as_completed(summing_futures):
+        # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
+        cell_sums = summing_future.result()
+        obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
+
+    # Bin all sums to have fewer unique values, to speed up bootstrap computation
+    obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
+
+    return obs_df[CUBE_DIMS_OBS + ['approx_size_factor']]
+
+
+def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame) -> pd.DataFrame:
+    var_df = query.var().concat().to_pandas().set_index("soma_joinid")
+    # var_df['feature_id'] = var_df['feature_id'].astype('category')
+    # size_factors['dataset_id'] = size_factors['dataset_id'].astype('category')
+    # size_factors['cell_type'] = size_factors['cell_type'].astype('category')
+
+    # accumulate into feature_id/cell_type/dataset_id Pandas multi-indexed DataFrame
+    cube_index = pd.MultiIndex.from_arrays([[]] * 3, names=CUBE_DIMS)
+    cube = pd.DataFrame(index=cube_index, columns=ESTIMATOR_NAMES)
+    # Process X by cube rows. This ensures that estimators are computed
+    # for all X data contributing to a given cube row aggregation.
+    # TODO: `groups` converts categoricals to strs, which is inefficient
+    cube_coords = size_factors[CUBE_DIMS_OBS].groupby(CUBE_DIMS_OBS).groups
+    soma_dim_0_batch = []
+    batch_futures = []
+    for soma_dim_0_row in cube_coords.values():
+        soma_dim_0_batch.extend(soma_dim_0_row)
+
+        # Fetch data for multiple cube rows at once, to reduce X.read() call count
+        if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
+            continue
+
+        batch_futures.append(ppe.submit(compute_all_estimators_for_batch,
+                                        soma_dim_0_batch,
+                                        size_factors,
+                                        var_df,
+                                        query.experiment.ms['RNA'].X['raw'].uri))
+        soma_dim_0_batch = []
+
+    # Process final batch
+    if len(soma_dim_0_batch) > 0:
+        batch_futures.append(ppe.submit(compute_all_estimators_for_batch,
+                                        soma_dim_0_batch,
+                                        size_factors,
+                                        var_df,
+                                        query.experiment.ms['RNA'].X['raw'].uri))
+    for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
+        result = future.result()
+        print(result)
+        cube = cube.append(result)
+
+    logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
+
+    return cube
+
+
 if __name__ == "__main__":
     census_soma = cell_census.open_soma(uri=sys.argv[1] if len(sys.argv) > 1 else None)
 
@@ -93,77 +168,27 @@ if __name__ == "__main__":
 
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
-                             obs_query=AxisQuery(),  #value_filter="cell_type=='plasma cell'"),
+                             obs_query=AxisQuery(),  # value_filter="cell_type=='plasma cell'"),
                              var_query=AxisQuery(coords=(slice(0, 100),))) as query:
-        var_df = query.var().concat().to_pandas().set_index("soma_joinid")
-        var_df['feature_id'] = var_df['feature_id'].astype('category')
-
-        obs_df = (
-            query.obs(column_names=["soma_joinid"] + CUBE_DIMS_OBS).
-            concat().
-            to_pandas().
-            set_index("soma_joinid")
-        )
-        obs_df['dataset_id'] = obs_df['dataset_id'].astype('category')
-        obs_df['cell_type'] = obs_df['cell_type'].astype('category')
-        obs_df['size_factor'] = 0  # accumulated
 
         logging.info(f"Pass 1: Compute Approx Size Factors")
 
-        summing_futures = []
-        for X_tbl in query.X("raw").tables():
-            logging.info(f"Pass 1: Processing X batch nnz={X_tbl.shape[0]}")
-            summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl))
+        if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
+            size_factors = pass_1_compute_size_factors(ppe, query)
 
-        for future in futures.as_completed(summing_futures):
-            # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
-            cell_sums = future.result()
-            obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
+            # for col in size_factors.select_dtypes(include=pd.Categorical):
+            #     size_factors[col] = col.astype(str)
+            tiledb.from_pandas(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI, size_factors)
+            logging.info(f"Saved `obs_with_size_factor` TileDB Array")
+        else:
+            size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:]
+            # for col in size_factors.select_dtypes(include=object):
+            #     size_factors[col] = size_factors[col].astype('category')
 
-        # Bin all sums to have fewer unique values, to speed up bootstrap computation
-        obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
 
         logging.info(f"Pass 2: Compute Estimators")
 
-        # accumulate into feature_id/cell_type/dataset_id Pandas multi-indexed DataFrame
-        cube_index = pd.MultiIndex.from_arrays([[]] * 3, names=CUBE_DIMS)
-        cube = pd.DataFrame(index=cube_index, columns=ESTIMATOR_NAMES)
-
-        # Process X by cube rows. This ensures that estimators are computed
-        # for all X data contributing to a given cube row aggregation.
-        # TODO: `groups` converts categoricals to strs, which is inefficient
-        cube_coords = obs_df[CUBE_DIMS_OBS].groupby(CUBE_DIMS_OBS).groups
-        soma_dim_0_batch = []
-
-        batch_futures = []
-
-        for soma_dim_0_row in cube_coords.values():
-            soma_dim_0_batch.extend(soma_dim_0_row)
-
-            # Fetch data for multiple cube rows at once, to reduce X.read() call count
-            if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
-                continue
-
-            batch_futures.append(ppe.submit(compute_all_estimators_for_batch,
-                                            soma_dim_0_batch,
-                                            obs_df,
-                                            var_df,
-                                            query.experiment.ms['RNA'].X['raw'].uri))
-            soma_dim_0_batch = []
-
-        # Process final batch
-        if len(soma_dim_0_batch) > 0:
-            batch_futures.append(ppe.submit(compute_all_estimators_for_batch,
-                                            soma_dim_0_batch,
-                                            obs_df,
-                                            var_df,
-                                            query.experiment.ms['RNA'].X['raw'].uri))
-
-        for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
-            result = future.result()
-            print(result)
-            cube = cube.append(result)
-            logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
+        cube = pass_2_compute_estimators(query, size_factors)
 
         # TODO: Write to disk (e.g. as TileDB Array)
 
