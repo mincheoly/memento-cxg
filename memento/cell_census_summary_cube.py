@@ -3,7 +3,6 @@ import logging
 import multiprocessing
 import sys
 from concurrent import futures
-from concurrent.futures import ProcessPoolExecutor
 from typing import Optional
 
 import cell_census
@@ -96,7 +95,7 @@ def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, n: int) -> pd.Series:
     return result
 
 
-def pass_1_compute_size_factors(ppe: ProcessPoolExecutor, query: ExperimentAxisQuery) -> pd.DataFrame:
+def pass_1_compute_size_factors(query: ExperimentAxisQuery) -> pd.DataFrame:
     obs_df = (
         query.obs(column_names=["soma_joinid"] + CUBE_DIMS_OBS).
         concat().
@@ -105,13 +104,14 @@ def pass_1_compute_size_factors(ppe: ProcessPoolExecutor, query: ExperimentAxisQ
     )
     obs_df['size_factor'] = 0  # accumulated
 
+    executor = futures.ThreadPoolExecutor()
     summing_futures = []
     X_nnz = query._ms.X["raw"].nnz
     cum_nnz = 0
     for n, X_tbl in enumerate(query.X("raw").tables(), start=1):
         cum_nnz += X_tbl.shape[0]
         logging.info(f"Pass 1: Submitting X batch {n}, nnz={X_tbl.shape[0]}, {100 * cum_nnz / X_nnz:0.1f}%")
-        summing_futures.append(ppe.submit(sum_gene_expression_levels_by_cell, X_tbl, n))
+        summing_futures.append(executor.submit(sum_gene_expression_levels_by_cell, X_tbl, n))
 
     for n, summing_future in enumerate(futures.as_completed(summing_futures), start=1):
         # Accumulate cell sums, since a given cell's X values may be returned across multiple tables
@@ -141,6 +141,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     cube_coords = size_factors[CUBE_DIMS_OBS].groupby(CUBE_DIMS_OBS).groups
     soma_dim_0_batch = []
     batch_futures = []
+    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
     for soma_dim_0_row in cube_coords.values():
         soma_dim_0_batch.extend(soma_dim_0_row)
 
@@ -148,20 +149,20 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
         if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
             continue
 
-        batch_futures.append(ppe.submit(compute_all_estimators_for_batch,
-                                        soma_dim_0_batch,
-                                        size_factors,
-                                        var_df,
-                                        query.experiment.ms['RNA'].X['raw'].uri))
+        batch_futures.append(executor.submit(compute_all_estimators_for_batch,
+                                             soma_dim_0_batch,
+                                             size_factors,
+                                             var_df,
+                                             query.experiment.ms['RNA'].X['raw'].uri))
         soma_dim_0_batch = []
 
     # Process final batch
     if len(soma_dim_0_batch) > 0:
-        batch_futures.append(ppe.submit(compute_all_estimators_for_batch,
-                                        soma_dim_0_batch,
-                                        size_factors,
-                                        var_df,
-                                        query.experiment.ms['RNA'].X['raw'].uri))
+        batch_futures.append(executor.submit(compute_all_estimators_for_batch,
+                                             soma_dim_0_batch,
+                                             size_factors,
+                                             var_df,
+                                             query.experiment.ms['RNA'].X['raw'].uri))
 
     # Accumulate results
     n_total_cells = 0
@@ -191,18 +192,17 @@ if __name__ == "__main__":
     # init multiprocessing
     if multiprocessing.get_start_method(True) != "spawn":
         multiprocessing.set_start_method("spawn", True)
-    ppe = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
 
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
-                             obs_query=AxisQuery(value_filter="is_primary_data == True"),  # value_filter="cell_type=='plasma cell'"),
+                             obs_query=AxisQuery(value_filter="is_primary_data == True"),
                              var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
 
         logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
 
         if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
             logging.info(f"Pass 1: Compute Approx Size Factors")
-            size_factors = pass_1_compute_size_factors(ppe, query)
+            size_factors = pass_1_compute_size_factors(query)
 
             # for col in size_factors.select_dtypes(include=pd.Categorical):
             #     size_factors[col] = col.astype(str)
