@@ -64,12 +64,14 @@ def compute_all_estimators(grouped):
     return pd.Series(data=[n, min, max, sum, mean, sem, variance, sev, selv])
 
 
-def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str):
+def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str) -> pd.DataFrame:
+    """Compute estimators for each gene"""
+
+    # NOTE: Requires AWS_REGION=us-west-2 env var, even though cell_census.open_soma() does not
     with soma.SparseNDArray.open(X_uri) as X:
         X_df = X.read(coords=(soma_dim_0,
                               var_df.index.values)).tables().concat().to_pandas()
         logging.info(f"Pass 2: Processing X batch cells={len(soma_dim_0)}, nnz={len(X_df)}")
-        # Compute estimators for each gene
         return (
             X_df.merge(var_df['feature_id'], left_on='soma_dim_1', right_index=True).
             merge(obs_df[CUBE_DIMS_OBS + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
@@ -146,10 +148,16 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
                                         size_factors,
                                         var_df,
                                         query.experiment.ms['RNA'].X['raw'].uri))
+
+    # Accumulate results
+    n_total_cells = 0
     for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
         result = future.result()
-        print(result)
+        n_total_cells += int(result['n'].sum())
         cube = cube.append(result)
+        logging.info(f"Pass 1: Completed {n} of {len(batch_futures)} batches, "
+                     f"total cells processed={n_total_cells}, total cube rows={len(cube)}")
+        logging.debug(result)
 
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
 
@@ -173,9 +181,9 @@ if __name__ == "__main__":
                              obs_query=AxisQuery(),  # value_filter="cell_type=='plasma cell'"),
                              var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
 
-        logging.info(f"Pass 1: Compute Approx Size Factors")
 
         if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
+            logging.info(f"Pass 1: Compute Approx Size Factors")
             size_factors = pass_1_compute_size_factors(ppe, query)
 
             # for col in size_factors.select_dtypes(include=pd.Categorical):
@@ -183,16 +191,14 @@ if __name__ == "__main__":
             tiledb.from_pandas(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI, size_factors)
             logging.info(f"Saved `obs_with_size_factor` TileDB Array")
         else:
+            logging.info(f"Pass 1: Compute Approx Size Factors (loading from stored data)")
             size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:]
             # for col in size_factors.select_dtypes(include=object):
             #     size_factors[col] = size_factors[col].astype('category')
 
-
         logging.info(f"Pass 2: Compute Estimators")
-
         cube = pass_2_compute_estimators(query, size_factors)
 
         # TODO: Write to disk (e.g. as TileDB Array)
 
         print(cube)
-
