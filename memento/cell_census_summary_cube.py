@@ -66,15 +66,14 @@ def compute_all_estimators(grouped):
     return pd.Series(data=[n, min, max, sum, mean, sem, variance, sev, selv])
 
 
-def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str) -> pd.DataFrame:
+def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str, batch: int) -> pd.DataFrame:
     """Compute estimators for each gene"""
 
     # NOTE: Requires AWS_REGION=us-west-2 env var, even though cell_census.open_soma() does not
     with soma.SparseNDArray.open(X_uri) as X:
-        X_df = X.read(coords=(soma_dim_0,
-                              var_df.index.values)).tables().concat().to_pandas()
-        logging.info(f"Pass 2: Processing X batch cells={len(soma_dim_0)}, nnz={len(X_df)}")
-        return (
+        X_df = X.read(coords=(soma_dim_0, var_df.index.values)).tables().concat().to_pandas()
+        logging.info(f"Pass 2: Computing X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
+        result = (
             X_df.merge(var_df['feature_id'], left_on='soma_dim_1', right_index=True).
             merge(obs_df[CUBE_DIMS_OBS + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
             drop(columns=['soma_dim_0', 'soma_dim_1']).
@@ -82,15 +81,17 @@ def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: p
             apply(compute_all_estimators).
             rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
             )
+        logging.info(f"Pass 2: Computing X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
+        return result
 
 
-def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, n: int) -> pd.Series:
-    logging.info(f"Pass 1: Computing X batch {n}, nnz={X_tbl.shape[0]}")
+def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, batch: int) -> pd.Series:
+    logging.info(f"Pass 1: Computing X batch {batch}, nnz={X_tbl.shape[0]}")
 
     # TODO: use PyArrow API only; avoid Pandas conversion
     result = X_tbl.to_pandas()[['soma_dim_0', 'soma_data']].groupby('soma_dim_0', sort=False).sum()['soma_data']
 
-    logging.info(f"Pass 1: Computing X batch {n}, nnz={X_tbl.shape[0]}: done")
+    logging.info(f"Pass 1: Computing X batch {batch}, nnz={X_tbl.shape[0]}: done")
 
     return result
 
@@ -141,7 +142,23 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     cube_coords = size_factors[CUBE_DIMS_OBS].groupby(CUBE_DIMS_OBS).groups
     soma_dim_0_batch = []
     batch_futures = []
+    n = n_cum_cells = 0
     executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
+    n_total_cells = query.n_obs
+
+    def submit_batch(soma_dim_0_batch_):
+        nonlocal n, n_cum_cells
+        n += 1
+        n_cum_cells += len(soma_dim_0_batch_)
+        logging.info(f"Pass 2: Submitting cells batch {n}, nnz={len(soma_dim_0_batch)}, "
+                     f"{100 * n_cum_cells / n_total_cells:0.1f}%")
+        batch_futures.append(executor.submit(compute_all_estimators_for_batch,
+                                             soma_dim_0_batch_,
+                                             size_factors,
+                                             var_df,
+                                             query.experiment.ms['RNA'].X['raw'].uri,
+                                             n))
+
     for soma_dim_0_row in cube_coords.values():
         soma_dim_0_batch.extend(soma_dim_0_row)
 
@@ -149,29 +166,20 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
         if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
             continue
 
-        batch_futures.append(executor.submit(compute_all_estimators_for_batch,
-                                             soma_dim_0_batch,
-                                             size_factors,
-                                             var_df,
-                                             query.experiment.ms['RNA'].X['raw'].uri))
+        submit_batch(soma_dim_0_batch)
         soma_dim_0_batch = []
 
     # Process final batch
     if len(soma_dim_0_batch) > 0:
-        batch_futures.append(executor.submit(compute_all_estimators_for_batch,
-                                             soma_dim_0_batch,
-                                             size_factors,
-                                             var_df,
-                                             query.experiment.ms['RNA'].X['raw'].uri))
+        submit_batch(soma_dim_0_batch)
 
     # Accumulate results
-    n_total_cells = 0
+    n_cum_cells = 0
     for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
         result = future.result()
-        n_total_cells += int(result['n'].sum())
         cube = cube.append(result)
-        logging.info(f"Pass 1: Completed {n} of {len(batch_futures)} batches, "
-                     f"total cells processed={n_total_cells}, total cube rows={len(cube)}")
+        logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%), "
+                     f"total cube rows={len(cube)}")
         logging.debug(result)
 
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
