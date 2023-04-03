@@ -1,4 +1,5 @@
 import concurrent
+import gc
 import logging
 import multiprocessing
 import sys
@@ -171,14 +172,14 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     soma_dim_0_batch = []
     batch_futures = []
     n = n_cum_cells = 0
-    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
+    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, max_tasks_per_child=1)
     n_total_cells = query.n_obs
 
     def submit_batch(soma_dim_0_batch_):
         nonlocal n, n_cum_cells
         n += 1
         n_cum_cells += len(soma_dim_0_batch_)
-        logging.info(f"Pass 2: Submitting cells batch {n}, nnz={len(soma_dim_0_batch)}, "
+        logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
                      f"{100 * n_cum_cells / n_total_cells:0.1f}%")
         batch_futures.append(executor.submit(compute_all_estimators_for_batch,
                                              soma_dim_0_batch_,
@@ -209,6 +210,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
         tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
         logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
         logging.debug(result)
+        gc.collect()
 
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
 
