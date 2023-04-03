@@ -6,7 +6,6 @@ from concurrent import futures
 from typing import Optional
 
 import cell_census
-import numpy as np
 import pandas as pd
 import pyarrow as pa
 import scipy.sparse
@@ -64,7 +63,7 @@ Q = 0.1  # RNA capture efficiency depending on technology
 
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
-GENE_COUNT: Optional[int] = 100
+GENE_COUNT: Optional[int] = None
 
 logging.basicConfig(
     format="%(asctime)s %(process)-7s %(levelname)-8s %(message)s",
@@ -230,7 +229,7 @@ if __name__ == "__main__":
 
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
-                             obs_query=AxisQuery(value_filter="is_primary_data == False"),
+                             obs_query=AxisQuery(value_filter="is_primary_data == True"),
                              var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
 
         logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
