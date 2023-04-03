@@ -6,6 +6,7 @@ from concurrent import futures
 from typing import Optional
 
 import cell_census
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import scipy.sparse
@@ -13,15 +14,18 @@ import scipy.sparse
 import tiledb
 import tiledbsoma as soma
 from somacore import ExperimentAxisQuery, AxisQuery
+from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
 
 from estimators import compute_mean, compute_sem, bin_size_factor, compute_variance, compute_sev
+
+ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube"
 
 OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
 TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
 
-# The minimum number of X values that should be processed at a time by each child process.
-MIN_BATCH_SIZE = 10000
+# The minimum number of cells that should be processed at a time by each child process.
+MIN_BATCH_SIZE = 1000
 
 CUBE_DIMS_OBS = [
     "cell_type",
@@ -29,13 +33,38 @@ CUBE_DIMS_OBS = [
 ]
 CUBE_DIMS = ['feature_id'] + CUBE_DIMS_OBS
 
+CUBE_SCHEMA = ArraySchema(
+  domain=Domain(*[
+    Dim(name='feature_id', dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ])),
+    Dim(name='cell_type', dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ])),
+    Dim(name='dataset_id', dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ])),
+  ]),
+  attrs=[
+    Attr(name='n', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='min', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='max', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='sum', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='mean', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='sem', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='var', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='sev', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+    Attr(name='selv', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
+  ],
+  cell_order='row-major',
+  tile_order='row-major',
+  capacity=10000,
+  sparse=True,
+  allows_duplicates=True,
+)
+
+
 ESTIMATOR_NAMES = ['n', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
 Q = 0.1  # RNA capture efficiency depending on technology
 
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
-GENE_COUNT: Optional[int] = None
+GENE_COUNT: Optional[int] = 100
 
 logging.basicConfig(
     format="%(asctime)s %(process)-7s %(levelname)-8s %(message)s",
@@ -127,15 +156,15 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery) -> pd.DataFrame:
     return obs_df[CUBE_DIMS_OBS + ['approx_size_factor']]
 
 
-def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame) -> pd.DataFrame:
+def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame) -> None:
     var_df = query.var().concat().to_pandas().set_index("soma_joinid")
     # var_df['feature_id'] = var_df['feature_id'].astype('category')
     # size_factors['dataset_id'] = size_factors['dataset_id'].astype('category')
     # size_factors['cell_type'] = size_factors['cell_type'].astype('category')
 
-    # accumulate into feature_id/cell_type/dataset_id Pandas multi-indexed DataFrame
-    cube_index = pd.MultiIndex.from_arrays([[]] * 3, names=CUBE_DIMS)
-    cube = pd.DataFrame(index=cube_index, columns=ESTIMATOR_NAMES)
+    # accumulate into a TileDB array
+    tiledb.Array.create(ESTIMATORS_CUBE_ARRAY_URI, CUBE_SCHEMA, overwrite=True)
+
     # Process X by cube rows. This ensures that estimators are computed
     # for all X data contributing to a given cube row aggregation.
     # TODO: `groups` converts categoricals to strs, which is inefficient
@@ -174,17 +203,15 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
         submit_batch(soma_dim_0_batch)
 
     # Accumulate results
+
     n_cum_cells = 0
     for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
         result = future.result()
-        cube = cube.append(result)
-        logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%), "
-                     f"total cube rows={len(cube)}")
+        tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
+        logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
         logging.debug(result)
 
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
-
-    return cube
 
 
 if __name__ == "__main__":
@@ -203,7 +230,7 @@ if __name__ == "__main__":
 
     with ExperimentAxisQuery(organism_census,
                              measurement_name="RNA",
-                             obs_query=AxisQuery(value_filter="is_primary_data == True"),
+                             obs_query=AxisQuery(value_filter="is_primary_data == False"),
                              var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
 
         logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
@@ -223,8 +250,5 @@ if __name__ == "__main__":
             #     size_factors[col] = size_factors[col].astype('category')
 
         logging.info(f"Pass 2: Compute Estimators")
-        cube = pass_2_compute_estimators(query, size_factors)
+        pass_2_compute_estimators(query, size_factors)
 
-        # TODO: Write to disk (e.g. as TileDB Array)
-
-        print(cube)
