@@ -111,7 +111,10 @@ def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: p
             rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
             )
         logging.info(f"Pass 2: Computing X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
-        return result
+
+    gc.collect()
+
+    return result
 
 
 def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, batch: int) -> pd.Series:
