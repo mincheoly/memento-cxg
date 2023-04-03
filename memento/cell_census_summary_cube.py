@@ -175,7 +175,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     soma_dim_0_batch = []
     batch_futures = []
     n = n_cum_cells = 0
-    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, max_tasks_per_child=1)
+    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
     n_total_cells = query.n_obs
 
     def submit_batch(soma_dim_0_batch_):
