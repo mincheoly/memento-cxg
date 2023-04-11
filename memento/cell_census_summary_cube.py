@@ -6,7 +6,6 @@ import sys
 from concurrent import futures
 from typing import Optional
 
-import cell_census
 import pandas as pd
 import pyarrow as pa
 import scipy.sparse
@@ -31,13 +30,22 @@ CUBE_DIMS_OBS = [
     "cell_type",
     "dataset_id",
 ]
-CUBE_DIMS = ['feature_id'] + CUBE_DIMS_OBS
+# For testing
+# CUBE_DIMS_OBS = [
+#     "celltype",
+#     "study",
+# ]
+
+CUBE_DIMS_VAR = ['feature_id']
+# For testing
+# CUBE_DIMS_VAR = ['var_id']
+
+CUBE_DIMS = CUBE_DIMS_VAR + CUBE_DIMS_OBS
 
 CUBE_SCHEMA = ArraySchema(
   domain=Domain(*[
-    Dim(name='feature_id', dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ])),
-    Dim(name='cell_type', dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ])),
-    Dim(name='dataset_id', dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ])),
+    Dim(name=dim_name, dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ]))
+    for dim_name in CUBE_DIMS
   ]),
   attrs=[
     Attr(name='n', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
@@ -65,6 +73,10 @@ Q = 0.1  # RNA capture efficiency depending on technology
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
 GENE_COUNT: Optional[int] = None
+
+OBS_VALUE_FILTER = "is_primary_data == False"
+# For testing
+# OBS_VALUE_FILTER = None
 
 logging.basicConfig(
     format="%(asctime)s %(process)-7s %(levelname)-8s %(message)s",
@@ -95,25 +107,30 @@ def compute_all_estimators(grouped):
     return pd.Series(data=[n, min, max, sum, mean, sem, variance, sev, selv])
 
 
-def compute_all_estimators_for_batch(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str, batch: int) -> pd.DataFrame:
+def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_df: pd.DataFrame, X_uri: str, batch: int) -> pd.DataFrame:
     """Compute estimators for each gene"""
 
     # NOTE: Requires AWS_REGION=us-west-2 env var, even though cell_census.open_soma() does not
     with soma.SparseNDArray.open(X_uri) as X:
         X_df = X.read(coords=(soma_dim_0, var_df.index.values)).tables().concat().to_pandas()
         logging.info(f"Pass 2: Computing X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
-        result = (
-            X_df.merge(var_df['feature_id'], left_on='soma_dim_1', right_index=True).
-            merge(obs_df[CUBE_DIMS_OBS + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
-            drop(columns=['soma_dim_0', 'soma_dim_1']).
-            groupby(CUBE_DIMS, observed=True, sort=False).
-            apply(compute_all_estimators).
-            rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
-            )
+        result = compute_all_estimators_for_batch_pd(X_df, obs_df, var_df)
         logging.info(f"Pass 2: Computing X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
 
     gc.collect()
 
+    return result
+
+
+def compute_all_estimators_for_batch_pd(X_df, obs_df, var_df):
+    result = (
+        X_df.merge(var_df[CUBE_DIMS_VAR], left_on='soma_dim_1', right_index=True).
+        merge(obs_df[CUBE_DIMS_OBS + ['approx_size_factor']], left_on='soma_dim_0', right_index=True).
+        drop(columns=['soma_dim_0', 'soma_dim_1']).
+        groupby(CUBE_DIMS, observed=True, sort=False).
+        apply(compute_all_estimators).
+        rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
+    )
     return result
 
 
@@ -128,7 +145,7 @@ def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, batch: int) -> pd.Series
     return result
 
 
-def pass_1_compute_size_factors(query: ExperimentAxisQuery) -> pd.DataFrame:
+def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.DataFrame:
     obs_df = (
         query.obs(column_names=["soma_joinid"] + CUBE_DIMS_OBS).
         concat().
@@ -139,9 +156,9 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery) -> pd.DataFrame:
 
     executor = futures.ThreadPoolExecutor()
     summing_futures = []
-    X_nnz = query._ms.X["raw"].nnz
+    X_nnz = query._ms.X[layer].nnz
     cum_nnz = 0
-    for n, X_tbl in enumerate(query.X("raw").tables(), start=1):
+    for n, X_tbl in enumerate(query.X(layer).tables(), start=1):
         cum_nnz += X_tbl.shape[0]
         logging.info(f"Pass 1: Submitting X batch {n}, nnz={X_tbl.shape[0]}, {100 * cum_nnz / X_nnz:0.1f}%")
         summing_futures.append(executor.submit(sum_gene_expression_levels_by_cell, X_tbl, n))
@@ -159,7 +176,8 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery) -> pd.DataFrame:
     return obs_df[CUBE_DIMS_OBS + ['approx_size_factor']]
 
 
-def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame) -> None:
+def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame, /,
+                              measurement_name: str, layer: str) -> None:
     var_df = query.var().concat().to_pandas().set_index("soma_joinid")
     # var_df['feature_id'] = var_df['feature_id'].astype('category')
     # size_factors['dataset_id'] = size_factors['dataset_id'].astype('category')
@@ -184,11 +202,11 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
         n_cum_cells += len(soma_dim_0_batch_)
         logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
                      f"{100 * n_cum_cells / n_total_cells:0.1f}%")
-        batch_futures.append(executor.submit(compute_all_estimators_for_batch,
+        batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
                                              soma_dim_0_batch_,
                                              size_factors,
                                              var_df,
-                                             query.experiment.ms['RNA'].X['raw'].uri,
+                                             query.experiment.ms[measurement_name].X[layer].uri,
                                              n))
 
     for soma_dim_0_row in cube_coords.values():
@@ -219,29 +237,28 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
 
 
 if __name__ == "__main__":
-    census_soma = cell_census.open_soma(uri=sys.argv[1] if len(sys.argv) > 1 else None,
-                                        context=soma.SOMATileDBContext().replace(tiledb_config={
-                                            "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})
-                                        )
-
-    organism_label = sys.argv[2] if len(sys.argv) > 2 else list(census_soma["census_data"].keys())[0]
-
-    organism_census = census_soma["census_data"][organism_label]
-
     # init multiprocessing
     if multiprocessing.get_start_method(True) != "spawn":
         multiprocessing.set_start_method("spawn", True)
 
-    with ExperimentAxisQuery(organism_census,
-                             measurement_name="RNA",
-                             obs_query=AxisQuery(value_filter="is_primary_data == True"),
-                             var_query=AxisQuery(coords=(slice(0, GENE_COUNT),))) as query:
+    exp_uri = sys.argv[1] if len(sys.argv) > 1 else None
+    layer = sys.argv[2] if len(sys.argv) > 2 else "raw"
+    measurement_name = "RNA"
+
+    with soma.Experiment.open(uri=exp_uri,
+                              context=soma.SOMATileDBContext().replace(tiledb_config={
+                                  "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})
+                              ) as exp:
+
+        query = exp.axis_query(measurement_name=measurement_name,
+                               obs_query=AxisQuery(value_filter=OBS_VALUE_FILTER),
+                               var_query=AxisQuery(coords=(slice(0, GENE_COUNT),)))
 
         logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
 
         if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
             logging.info(f"Pass 1: Compute Approx Size Factors")
-            size_factors = pass_1_compute_size_factors(query)
+            size_factors = pass_1_compute_size_factors(query, layer)
 
             # for col in size_factors.select_dtypes(include=pd.Categorical):
             #     size_factors[col] = col.astype(str)
@@ -254,5 +271,5 @@ if __name__ == "__main__":
             #     size_factors[col] = size_factors[col].astype('category')
 
         logging.info(f"Pass 2: Compute Estimators")
-        pass_2_compute_estimators(query, size_factors)
+        pass_2_compute_estimators(query, size_factors, measurement_name=measurement_name, layer=layer)
 
