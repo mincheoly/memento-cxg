@@ -41,7 +41,7 @@ CUBE_DIMS_VAR = ['feature_id']
 # For testing
 # CUBE_DIMS_VAR = ['var_id']
 
-CUBE_DIMS = CUBE_DIMS_VAR + CUBE_DIMS_OBS
+CUBE_DIMS = CUBE_DIMS_OBS + CUBE_DIMS_VAR
 
 CUBE_SCHEMA = ArraySchema(
   domain=Domain(*[
@@ -95,20 +95,27 @@ pd.options.display.width = 1024
 pd.options.display.min_rows = 40
 
 
-def compute_all_estimators(cube_coord_group: pd.DataFrame, obs_df: pd.DataFrame):
+def compute_all_estimators_for_obs_group(obs_group, obs_df):
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
 
-    size_factors_for_group = obs_df[
-        (obs_df[CUBE_DIMS_OBS[0]] == cube_coord_group.name[1]) &
-        (obs_df[CUBE_DIMS_OBS[1]] == cube_coord_group.name[2])][['approx_size_factor']]
+    size_factors_for_obs_group = obs_df[
+        (obs_df[CUBE_DIMS_OBS[0]] == obs_group.name[0]) &
+        (obs_df[CUBE_DIMS_OBS[1]] == obs_group.name[1])][['approx_size_factor']]
+    gene_groups = obs_group.groupby(CUBE_DIMS_VAR)
+    estimators = gene_groups.apply(lambda gene_group: compute_all_estimators_for_gene(gene_group, size_factors_for_obs_group))
+    return estimators
+
+
+def compute_all_estimators_for_gene(gene_group: pd.DataFrame, size_factors_for_obs_group: pd.DataFrame):
+    """Computes all estimators for a given {cell type, dataset, gene} group of expression values"""
     data_dense = (
-        size_factors_for_group[[]].  # just the soma_dim_0 index
-        join(cube_coord_group[['soma_dim_0', 'soma_data']].set_index('soma_dim_0'), how='left').
+        size_factors_for_obs_group[[]].  # just the soma_dim_0 index
+        join(gene_group[['soma_dim_0', 'soma_data']].set_index('soma_dim_0'), how='left').
         reset_index()
     )
 
     X_dense = data_dense.soma_data.to_numpy()
-    size_factors_dense = size_factors_for_group.approx_size_factor.to_numpy()
+    size_factors_dense = size_factors_for_obs_group.approx_size_factor.to_numpy()
 
     data_sparse = data_dense[data_dense.soma_data.notna()]
     X_sparse = data_sparse.soma_data.to_numpy()
@@ -116,14 +123,14 @@ def compute_all_estimators(cube_coord_group: pd.DataFrame, obs_df: pd.DataFrame)
                                    shape=(len(data_dense), 1)).tocsc()
 
     n_obs = len(X_dense)
-    nnz = cube_coord_group.shape[0]
+    nnz = gene_group.shape[0]
     min_ = X_sparse.min()
     max_ = X_sparse.max()
     sum_ = X_sparse.sum()
     sample_mean, variance = compute_variance(X_csc, Q, size_factors_dense)
     mean = compute_mean(X_dense, Q, sample_mean, variance, size_factors_dense)
     sem = compute_sem(variance, n_obs)
-    sev, selv = (0, 0) #compute_sev(X_csc, Q, size_factors_dense, num_boot=10000)
+    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=10000)
 
     return pd.Series(data=[nnz, n_obs, min_, max_, sum_, mean, sem, variance, sev, selv])
 
@@ -149,9 +156,9 @@ def compute_all_estimators_for_batch_pd(X_df: pd.DataFrame, obs_df: pd.DataFrame
         X_df.merge(var_df[CUBE_DIMS_VAR], left_on='soma_dim_1', right_index=True).
         merge(obs_df[CUBE_DIMS_OBS], left_on='soma_dim_0', right_index=True).
         drop(columns=['soma_dim_1']).
-        groupby(CUBE_DIMS, observed=True, sort=False).
+        groupby(CUBE_DIMS_OBS, observed=True, sort=False).
         apply(
-            lambda group: compute_all_estimators(group, obs_df)).
+            lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df)).
         rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
     )
     return result
@@ -223,57 +230,56 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, obs_df: pd.DataFrame, 
     executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
     n_total_cells = query.n_obs
 
-    for soma_dim_0_ids in cube_obs_coord_groups.values():
-        soma_dim_0_batch.extend(soma_dim_0_ids)
-        if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
-            continue
-        n += 1
-        compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
-                                             query.experiment.ms[measurement_name].X[layer].uri, n)
-        soma_dim_0_batch = []
-
-    if len(soma_dim_0_batch) > 0:
-        n += 1
-        compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
-                                             query.experiment.ms[measurement_name].X[layer].uri, n)
-
-    # def submit_batch(soma_dim_0_batch_):
-    #     nonlocal n, n_cum_cells
-    #     n += 1
-    #     n_cum_cells += len(soma_dim_0_batch_)
-    #     logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
-    #                  f"{100 * n_cum_cells / n_total_cells:0.1f}%")
-    #     batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
-    #                                          soma_dim_0_batch_,
-    #                                          size_factors,
-    #                                          var_df,
-    #                                          size_factors,
-    #                                          query.experiment.ms[measurement_name].X[layer].uri,
-    #                                          n))
-    #
     # for soma_dim_0_ids in cube_obs_coord_groups.values():
     #     soma_dim_0_batch.extend(soma_dim_0_ids)
-    #
-    #     # Fetch data for multiple cube rows at once, to reduce X.read() call count
     #     if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
     #         continue
-    #
-    #     submit_batch(soma_dim_0_batch)
+    #     n += 1
+    #     compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
+    #                                          query.experiment.ms[measurement_name].X[layer].uri, n)
     #     soma_dim_0_batch = []
     #
-    # # Process final batch
     # if len(soma_dim_0_batch) > 0:
-    #     submit_batch(soma_dim_0_batch)
-    #
-    # # Accumulate results
-    #
-    # n_cum_cells = 0
-    # for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
-    #     result = future.result()
-    #     tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
-    #     logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
-    #     logging.debug(result)
-    #     gc.collect()
+    #     n += 1
+    #     compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
+    #                                          query.experiment.ms[measurement_name].X[layer].uri, n)
+
+    def submit_batch(soma_dim_0_batch_):
+        nonlocal n, n_cum_cells
+        n += 1
+        n_cum_cells += len(soma_dim_0_batch_)
+        logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
+                     f"{100 * n_cum_cells / n_total_cells:0.1f}%")
+        batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
+                                             soma_dim_0_batch_,
+                                             obs_df,
+                                             var_df,
+                                             query.experiment.ms[measurement_name].X[layer].uri,
+                                             n))
+
+    for soma_dim_0_ids in cube_obs_coord_groups.values():
+        soma_dim_0_batch.extend(soma_dim_0_ids)
+
+        # Fetch data for multiple cube rows at once, to reduce X.read() call count
+        if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
+            continue
+
+        submit_batch(soma_dim_0_batch)
+        soma_dim_0_batch = []
+
+    # Process final batch
+    if len(soma_dim_0_batch) > 0:
+        submit_batch(soma_dim_0_batch)
+
+    # Accumulate results
+
+    n_cum_cells = 0
+    for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
+        result = future.result()
+        tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
+        logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
+        logging.debug(result)
+        gc.collect()
 
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
 
