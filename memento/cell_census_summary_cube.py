@@ -123,6 +123,9 @@ def compute_all_estimators_for_gene(gene_group: pd.DataFrame, size_factors_for_o
                                    shape=(len(data_dense), 1)).tocsc()
 
     n_obs = len(X_dense)
+    if n_obs == 0:
+        return pd.Series(data=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
     nnz = gene_group.shape[0]
     min_ = X_sparse.min()
     max_ = X_sparse.max()

@@ -64,10 +64,14 @@ def compute_mean(X: np.array, q: float, sample_mean: float, variance: float, siz
 
 def compute_sem(variance, n_obs: int):
 	""" Approximate standard error of the mean. """
-	
-	sem = np.sqrt(variance/n_obs)
-	
-	return sem
+
+	if variance < 0:
+		# Avoids a numpy warning, returns same result
+		# TODO: Fix negative variance computation
+		return np.nan
+
+	return np.sqrt(variance/n_obs)
+
 
 
 def compute_variance(
