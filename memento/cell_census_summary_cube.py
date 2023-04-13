@@ -76,7 +76,7 @@ MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
 GENE_COUNT: Optional[int] = None
 
-OBS_VALUE_FILTER = "is_primary_data == False"
+OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
 # OBS_VALUE_FILTER = None
 
@@ -144,6 +144,8 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
         X_df = X.read(coords=(soma_dim_0, var_df.index.values)).tables().concat().to_pandas()
         logging.info(f"Pass 2: Start X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
         result = compute_all_estimators_for_batch_pd(X_df, obs_df, var_df)
+        if len(result) == 0:
+            logging.warning(f"Pass 2: Batch {batch} had empty result, cells={len(soma_dim_0)}, nnz={len(X_df)}")
         logging.info(f"Pass 2: End X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
 
     gc.collect()
@@ -276,7 +278,10 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, obs_df: pd.DataFrame, 
     n_cum_cells = 0
     for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
         result = future.result()
-        tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
+        if len(result) > 0:
+            tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
+        else:
+            logging.warning(f"Pass 2: Batch had empty result")
         logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
         logging.debug(result)
         gc.collect()
