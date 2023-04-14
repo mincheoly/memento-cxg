@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import scipy.sparse
 import scipy.sparse as sparse
@@ -53,13 +55,15 @@ def unique_expr(expr, size_factor):
 
 def compute_mean(X: np.array, q: float, sample_mean: float, variance: float, size_factors: np.array):
 	""" Inverse variance weighted mean. """
-
-	# TODO: compare against values computed on main branch
 	cell_variance = (1-q) / size_factors * sample_mean + variance
+
 	norm_X = X * (1 / size_factors)
 
-	mean = np.average(np.nan_to_num(norm_X), weights=cell_variance)
-	return mean
+	if cell_variance.sum() == 0:
+		logging.warning(f"compute_mean(): weights sum is zero; {sample_mean=}, {variance=}, size_factors count={len(size_factors)}")
+		cell_variance = None
+
+	return np.average(np.nan_to_num(norm_X), weights=cell_variance)
 
 
 def compute_sem(variance, n_obs: int):
