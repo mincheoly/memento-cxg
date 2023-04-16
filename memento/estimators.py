@@ -18,16 +18,17 @@ def bin_size_factor(size_factor, num_bins=30):
 	return approx_sf
 
 
-def fill_invalid(val):
+def fill_invalid(val, group_name):
 	""" Fill invalid entries by randomly selecting a valid entry. """
-	
+
+	# negatives and nan values are invalid values for our purposes
 	invalid_mask = np.less_equal(val, 0., where=~np.isnan(val)) | np.isnan(val)
 	num_invalid = invalid_mask.sum()
 	
 	if num_invalid == val.shape[0]:
-		# TODO: Returning None causes failure. What does it mean when all values are invalid and how should this be handled?
-		return np.zeros(shape=val.shape)
-		# return None
+		# if all values are invalid, there are no valid values to choose from, so return all nans
+		logging.warning(f"all bootstrap variances are invalid for group {group_name}")
+		return np.full(shape=val.shape, fill_value=np.nan)
 
 	val[invalid_mask] = np.random.choice(val[~invalid_mask], num_invalid)
 	
@@ -71,7 +72,6 @@ def compute_sem(variance, n_obs: int):
 
 	if variance < 0:
 		# Avoids a numpy warning, returns same result
-		# TODO: Fix negative variance computation
 		return np.nan
 
 	return np.sqrt(variance/n_obs)
@@ -113,17 +113,16 @@ def compute_bootstrap_variance(
 	mm_M2 = (unique_expr ** 2 * bootstrap_freq * inverse_size_factor_sq - (
 				1 - q) * unique_expr * bootstrap_freq * inverse_size_factor_sq).sum(axis=0) / n_obs
 
-	mean = mm_M1
-	variance = (mm_M2 - mm_M1 ** 2)
-
-	return mean, variance
+	variance = mm_M2 - mm_M1 ** 2
+	return variance
 
 
 def compute_sev(
 		X: sparse.csc_matrix,
 		q: float,
 		approx_size_factor: np.array,
-		num_boot: int = 5000
+		num_boot: int = 5000,
+		group_name: tuple = ()
 ):
 	""" Compute the standard error of the variance. """
 
@@ -133,7 +132,7 @@ def compute_sev(
 	gen = np.random.Generator(np.random.PCG64(5))
 	gene_rvs = gen.multinomial(n_obs, counts / counts.sum(), size=num_boot).T
 
-	mean, var = compute_bootstrap_variance(
+	var = compute_bootstrap_variance(
 		unique_expr=expr,
 		bootstrap_freq=gene_rvs,
 		n_obs=n_obs,
@@ -142,7 +141,7 @@ def compute_sev(
 		inverse_size_factor_sq=inv_sf_sq
 	)
 
-	var = fill_invalid(var)
+	var = fill_invalid(var, group_name)
 
 	sev = np.nanstd(var)
 	selv = np.nanstd(np.log(var))

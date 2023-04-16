@@ -67,7 +67,6 @@ CUBE_SCHEMA = ArraySchema(
   allows_duplicates=True,
 )
 
-
 ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
 Q = 0.1  # RNA capture efficiency depending on technology
