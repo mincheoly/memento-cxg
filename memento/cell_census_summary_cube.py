@@ -4,7 +4,6 @@ import logging
 import multiprocessing
 import sys
 from concurrent import futures
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -22,10 +21,14 @@ ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube"
 
 OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
-TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
+TILEDB_SOMA_BUFFER_BYTES = 2**31
+# For testing
+# TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
 
 # The minimum number of cells that should be processed at a time by each child process.
-MIN_BATCH_SIZE = 1000
+MIN_BATCH_SIZE = 2**14
+# For testing
+# MIN_BATCH_SIZE = 1000
 
 CUBE_DIMS_OBS = [
     "cell_type",
@@ -73,14 +76,16 @@ Q = 0.1  # RNA capture efficiency depending on technology
 
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
-GENE_COUNT: Optional[int] = None
+VAR_VALUE_FILTER = None
+# For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
+# VAR_VALUE_FILTER = "feature_id == 'ENSG00000005882'" #ENSG00000002330'"
 
 OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
-# OBS_VALUE_FILTER = None
+# OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 
 # For testing
-# seed = 1
+#seed = 1
 
 logging.basicConfig(
     format="%(asctime)s %(process)-7s %(levelname)-8s %(message)s",
@@ -89,6 +94,7 @@ logging.basicConfig(
 )
 logging.captureWarnings(True)
 
+
 pd.options.display.max_columns = None
 pd.options.display.width = 1024
 pd.options.display.min_rows = 40
@@ -96,17 +102,18 @@ pd.options.display.min_rows = 40
 
 def compute_all_estimators_for_obs_group(obs_group, obs_df):
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
-
     size_factors_for_obs_group = obs_df[
         (obs_df[CUBE_DIMS_OBS[0]] == obs_group.name[0]) &
         (obs_df[CUBE_DIMS_OBS[1]] == obs_group.name[1])][['approx_size_factor']]
     gene_groups = obs_group.groupby(CUBE_DIMS_VAR)
-    estimators = gene_groups.apply(lambda gene_group: compute_all_estimators_for_gene(gene_group, size_factors_for_obs_group))
+    estimators = gene_groups.apply(lambda gene_group: compute_all_estimators_for_gene(obs_group.name, gene_group, size_factors_for_obs_group))
     return estimators
 
 
-def compute_all_estimators_for_gene(gene_group: pd.DataFrame, size_factors_for_obs_group: pd.DataFrame):
+def compute_all_estimators_for_gene(obs_group_name: str, gene_group: pd.DataFrame, size_factors_for_obs_group: pd.DataFrame):
     """Computes all estimators for a given {cell type, dataset, gene} group of expression values"""
+    group_name = (*obs_group_name, gene_group.name)
+
     data_dense = (
         size_factors_for_obs_group[[]].  # just the soma_dim_0 index
         join(gene_group[['soma_dim_0', 'soma_data']].set_index('soma_dim_0'), how='left').
@@ -129,10 +136,10 @@ def compute_all_estimators_for_gene(gene_group: pd.DataFrame, size_factors_for_o
     min_ = X_sparse.min()
     max_ = X_sparse.max()
     sum_ = X_sparse.sum()
-    sample_mean, variance = compute_variance(X_csc, Q, size_factors_dense)
+    sample_mean, variance = compute_variance(X_csc, Q, size_factors_dense, group_name=group_name)
     mean = compute_mean(X_dense, Q, sample_mean, variance, size_factors_dense)
     sem = compute_sem(variance, n_obs)
-    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=10000)
+    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=10000, group_name=group_name)
 
     return pd.Series(data=[nnz, n_obs, min_, max_, sum_, mean, sem, variance, sev, selv])
 
@@ -234,6 +241,8 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, obs_df: pd.DataFrame, 
     executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
     n_total_cells = query.n_obs
 
+    # For testing/debugging: Run pass 2 without multiprocessing
+    #
     # for soma_dim_0_ids in cube_obs_coord_groups.values():
     #     soma_dim_0_batch.extend(soma_dim_0_ids)
     #     if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
@@ -307,24 +316,26 @@ if __name__ == "__main__":
 
         query = exp.axis_query(measurement_name=measurement_name,
                                obs_query=AxisQuery(value_filter=OBS_VALUE_FILTER),
-                               var_query=AxisQuery(coords=(slice(0, GENE_COUNT),)))
-
-        logging.info(f"Processing {query.n_obs} cells and {query.n_vars} genes")
+                               # Note: Must use *all* genes to compute size factors correctly, even when var filter is
+                               # being used for testing
+                               var_query=AxisQuery())
+        logging.info(f"Pass 1: Processing {query.n_obs} cells and {query.n_vars} genes")
 
         if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
             logging.info(f"Pass 1: Compute Approx Size Factors")
             size_factors = pass_1_compute_size_factors(query, layer)
 
-            # for col in size_factors.select_dtypes(include=pd.Categorical):
-            #     size_factors[col] = col.astype(str)
             tiledb.from_pandas(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI, size_factors)
             logging.info(f"Saved `obs_with_size_factor` TileDB Array")
         else:
             logging.info(f"Pass 1: Compute Approx Size Factors (loading from stored data)")
             size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:]
-            # for col in size_factors.select_dtypes(include=object):
-            #     size_factors[col] = size_factors[col].astype('category')
 
         logging.info(f"Pass 2: Compute Estimators")
+        query = exp.axis_query(measurement_name=measurement_name,
+                               obs_query=AxisQuery(value_filter=OBS_VALUE_FILTER),
+                               var_query=AxisQuery(value_filter=VAR_VALUE_FILTER))
+        logging.info(f"Pass 2: Processing {query.n_obs} cells and {query.n_vars} genes")
+
         pass_2_compute_estimators(query, size_factors, measurement_name=measurement_name, layer=layer)
 

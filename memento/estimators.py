@@ -1,7 +1,6 @@
 import logging
 
 import numpy as np
-import scipy.sparse
 import scipy.sparse as sparse
 import scipy.stats as stats
 
@@ -24,7 +23,7 @@ def fill_invalid(val, group_name):
 	# negatives and nan values are invalid values for our purposes
 	invalid_mask = np.less_equal(val, 0., where=~np.isnan(val)) | np.isnan(val)
 	num_invalid = invalid_mask.sum()
-	
+
 	if num_invalid == val.shape[0]:
 		# if all values are invalid, there are no valid values to choose from, so return all nans
 		logging.warning(f"all bootstrap variances are invalid for group {group_name}")
@@ -78,11 +77,7 @@ def compute_sem(variance, n_obs: int):
 
 
 
-def compute_variance(
-		X: sparse.csc_matrix,
-		q: float,
-		size_factor: np.array,
-):
+def compute_variance(X: sparse.csc_matrix, q: float, size_factor: np.array, group_name=None):
 	""" Compute the variances. """
 
 	n_obs = X.shape[0]
@@ -95,6 +90,9 @@ def compute_variance(
 
 	mean = mm_M1
 	variance = (mm_M2 - mm_M1 ** 2)
+
+	if variance < 0:
+		logging.warning(f"negative variance ({variance}) for group {group_name}: {X.data}")
 
 	return float(mean), float(variance)
 
