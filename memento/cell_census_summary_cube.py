@@ -222,9 +222,11 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.Da
     return obs_df[CUBE_DIMS_OBS + ['approx_size_factor']]
 
 
-def pass_2_compute_estimators(query: ExperimentAxisQuery, obs_df: pd.DataFrame, /,
+def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame, /,
                               measurement_name: str, layer: str) -> None:
     var_df = query.var().concat().to_pandas().set_index("soma_joinid")
+    obs_df = query.obs(column_names=['soma_joinid'] + CUBE_DIMS_OBS).concat().to_pandas().set_index("soma_joinid")
+    obs_df = obs_df.join(size_factors[['approx_size_factor']])
 
     # accumulate into a TileDB array
     tiledb.Array.create(ESTIMATORS_CUBE_ARRAY_URI, CUBE_SCHEMA, overwrite=True)
@@ -329,7 +331,7 @@ if __name__ == "__main__":
             logging.info(f"Saved `obs_with_size_factor` TileDB Array")
         else:
             logging.info(f"Pass 1: Compute Approx Size Factors (loading from stored data)")
-            size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:]
+            size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:].set_index('soma_joinid')
 
         logging.info(f"Pass 2: Compute Estimators")
         query = exp.axis_query(measurement_name=measurement_name,
