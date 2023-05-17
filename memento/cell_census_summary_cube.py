@@ -78,7 +78,7 @@ MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
-# VAR_VALUE_FILTER = "feature_id == 'ENSG00000005882'" #ENSG00000002330'"
+# VAR_VALUE_FILTER = "feature_id == 'ENSG00000135636'" #ENSG00000002330'"
 
 OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
@@ -149,7 +149,12 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
     """Compute estimators for each gene"""
 
     # NOTE: Requires AWS_REGION=us-west-2 env var, even though cell_census.open_soma() does not
-    with soma.SparseNDArray.open(X_uri) as X:
+    with soma.SparseNDArray.open(
+        X_uri, 
+        context=soma.SOMATileDBContext().replace(tiledb_config={
+            "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES,
+            "vfs.s3.region":"us-west-2",
+            "vfs.s3.no_sign_request":True})) as X:
         X_df = X.read(coords=(soma_dim_0, var_df.index.values)).tables().concat().to_pandas()
         logging.info(f"Pass 2: Start X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
         result = compute_all_estimators_for_batch_pd(X_df, obs_df, var_df)
@@ -244,20 +249,20 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     n_total_cells = query.n_obs
 
     # For testing/debugging: Run pass 2 without multiprocessing
-    #
-    # for soma_dim_0_ids in cube_obs_coord_groups.values():
-    #     soma_dim_0_batch.extend(soma_dim_0_ids)
-    #     if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
-    #         continue
-    #     n += 1
-    #     compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
-    #                                          query.experiment.ms[measurement_name].X[layer].uri, n)
-    #     soma_dim_0_batch = []
-    #
-    # if len(soma_dim_0_batch) > 0:
-    #     n += 1
-    #     compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
-    #                                          query.experiment.ms[measurement_name].X[layer].uri, n)
+    
+#     for soma_dim_0_ids in cube_obs_coord_groups.values():
+#         soma_dim_0_batch.extend(soma_dim_0_ids)
+#         if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
+#             continue
+#         n += 1
+#         compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
+#                                              query.experiment.ms[measurement_name].X[layer].uri, n)
+#         soma_dim_0_batch = []
+    
+#     if len(soma_dim_0_batch) > 0:
+#         n += 1
+#         compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
+#                                              query.experiment.ms[measurement_name].X[layer].uri, n)
 
     def submit_batch(soma_dim_0_batch_):
         nonlocal n, n_cum_cells
@@ -293,6 +298,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
         result = future.result()
         if len(result) > 0:
             tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
+            logging.info(f"Pass2: Writing to estimator cube.")
         else:
             logging.warning(f"Pass 2: Batch had empty result")
         logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
@@ -313,7 +319,9 @@ if __name__ == "__main__":
 
     with soma.Experiment.open(uri=exp_uri,
                               context=soma.SOMATileDBContext().replace(tiledb_config={
-                                  "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})
+                                  "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES,
+                                  "vfs.s3.region":"us-west-2",
+                                  "vfs.s3.no_sign_request":True})
                               ) as exp:
 
         query = exp.axis_query(measurement_name=measurement_name,
@@ -327,11 +335,11 @@ if __name__ == "__main__":
             logging.info(f"Pass 1: Compute Approx Size Factors")
             size_factors = pass_1_compute_size_factors(query, layer)
 
-            tiledb.from_pandas(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI, size_factors)
+            tiledb.from_pandas(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI, size_factors.reset_index(), index_col=[0])
             logging.info(f"Saved `obs_with_size_factor` TileDB Array")
         else:
             logging.info(f"Pass 1: Compute Approx Size Factors (loading from stored data)")
-            size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:]
+            size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:].set_index('soma_joinid')
 
         logging.info(f"Pass 2: Compute Estimators")
         query = exp.axis_query(measurement_name=measurement_name,
