@@ -16,7 +16,7 @@ Usage instructions:
 To use or inspect the results as Pandas DataFrame:
 ```
 import tiledb
-estimators = tiledb.open('estimators_cube').df[]:
+estimators = tiledb.open('estimators_cube').df[:]
 ```
 
 Notes:
