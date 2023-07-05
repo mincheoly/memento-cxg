@@ -17,9 +17,9 @@ from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
 
 from estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance
 
-ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube"
+ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube_test"
 
-OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
+OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor_test"
 
 TILEDB_SOMA_BUFFER_BYTES = 2**31
 # For testing
@@ -33,6 +33,11 @@ MIN_BATCH_SIZE = 2**14
 CUBE_DIMS_OBS = [
     "cell_type",
     "dataset_id",
+    "assay",
+    "suspension_type",
+    "donor_id",
+    "disease",
+    "sex"
 ]
 # For testing
 # CUBE_DIMS_OBS = [
@@ -80,9 +85,10 @@ VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
 # VAR_VALUE_FILTER = "feature_id == 'ENSG00000135636'" #ENSG00000002330'"
 
-OBS_VALUE_FILTER = "is_primary_data == True"
+# OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
-# OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
+# OBS_VALUE_FILTER = "is_primary_data == True and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
+OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 
 # For testing
 #seed = 1
@@ -136,10 +142,10 @@ def compute_all_estimators_for_gene(obs_group_name: str, gene_group: pd.DataFram
     min_ = X_sparse.min()
     max_ = X_sparse.max()
     sum_ = X_sparse.sum()
-    sample_mean, variance = compute_variance(X_csc, Q, size_factors_dense, group_name=group_name)
-    mean = compute_mean(X_dense, Q, sample_mean, variance, size_factors_dense)
-    sem = compute_sem(variance, n_obs)
-    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=10000, group_name=group_name)
+    mean = compute_mean(X_dense, size_factors_dense)
+    sem = compute_sem(X_dense, size_factors_dense)
+    variance = compute_variance(X_csc, Q, size_factors_dense, group_name=group_name)
+    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=5000, group_name=group_name)
 
     return pd.Series(data=[nnz, n_obs, min_, max_, sum_, mean, sem, variance, sev, selv])
 
@@ -220,6 +226,10 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.Da
         obs_df['size_factor'] = obs_df['size_factor'].add(cell_sums, fill_value=0)
         logging.info(f"Pass 1: Completed {n} of {len(summing_futures)} batches, "
                      f"total cube rows={len(obs_df)}")
+    
+    # Convert size factors to relative - prevents small floats for variance
+    global_n_umi = obs_df['size_factor'].values.mean()
+    obs_df['size_factor'] = obs_df['size_factor'].values/global_n_umi
 
     # Bin all sums to have fewer unique values, to speed up bootstrap computation
     obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)

@@ -5,6 +5,9 @@ import scipy.sparse as sparse
 import scipy.stats as stats
 
 
+RELIABILITY_THRESHOLD = 0.05
+
+
 def bin_size_factor(size_factor, num_bins=30):
     """ Bin the size factors to speed up bootstrap. """
     
@@ -53,32 +56,30 @@ def unique_expr(expr, size_factor):
     return 1 / approx_sf[index].reshape(-1, 1), 1 / approx_sf[index].reshape(-1, 1) ** 2, expr_to_return, count
 
 
-def compute_mean(X: np.array, q: float, sample_mean: float, variance: float, size_factors: np.array):
-    """ Inverse variance weighted mean. """
-    cell_variance = (1-q) / size_factors * sample_mean + variance
+def compute_mean(X: np.array, size_factors: np.array):
+    """ 
+        Compute the mean. Approximation of the inverse-variance weighted mean.
+    """
 
-    norm_X = X * (1 / size_factors)
-
-    if cell_variance.sum() == 0:
-        logging.warning(f"compute_mean(): weights sum is zero; {sample_mean=}, {variance=}, size_factors count={len(size_factors)}")
-        cell_variance = None
-
-    return np.average(np.nan_to_num(norm_X), weights=cell_variance)
+    mean = (X.sum()+1)/(size_factors.sum()+1)
+    
+    return float(mean)
 
 
-def compute_sem(variance, n_obs: int):
-    """ Approximate standard error of the mean. """
-
-    if variance < 0:
-        # Avoids a numpy warning, returns same result
-        return np.nan
-
-    return np.sqrt(variance/n_obs)
-
+def compute_sem(X: np.array, size_factors: np.array):
+    """ 
+        Compute standard error of the mean. Approximation of the SE of inverse-variance weighted mean.
+    """
+    
+    n_obs = X.shape[0]
+    return (X.var()*n_obs)/size_factors.sum()**2
 
 
 def compute_variance(X: sparse.csc_matrix, q: float, size_factor: np.array, group_name=None):
     """ Compute the variances. """
+    
+    if X.max() < 2 or X.mean() < RELIABILITY_THRESHOLD: # variance cannot be estimated
+        return 0
 
     n_obs = X.shape[0]
     row_weight = (1 / size_factor).reshape([1, -1])
@@ -95,7 +96,7 @@ def compute_variance(X: sparse.csc_matrix, q: float, size_factor: np.array, grou
         logging.warning(f"negative variance ({variance}) for group {group_name}: {X.data}")
         variance = mean
 
-    return float(mean), float(variance)
+    return float(variance)
 
 
 def compute_bootstrap_variance(
@@ -125,8 +126,8 @@ def compute_sev(
 ):
     """ Compute the standard error of the variance. """
     
-    if X.max() < 2:
-        return np.nan, np.nan
+    if X.max() < 2 or X.mean() < RELIABILITY_THRESHOLD: # variance cannot be estimated
+        return 0, 0
     
     n_obs = X.shape[0]
     inv_sf, inv_sf_sq, expr, counts = unique_expr(X, approx_size_factor)
