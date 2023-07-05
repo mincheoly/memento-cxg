@@ -59,6 +59,7 @@ def unique_expr(expr, size_factor):
 def compute_mean(X: np.array, size_factors: np.array):
     """ 
         Compute the mean. Approximation of the inverse-variance weighted mean.
+        +1 pseudocount.
     """
 
     mean = (X.sum()+1)/(size_factors.sum()+1)
@@ -72,7 +73,7 @@ def compute_sem(X: np.array, size_factors: np.array):
     """
     
     n_obs = X.shape[0]
-    return (X.var()*n_obs)/size_factors.sum()**2
+    return (X.std()*np.sqrt(n_obs))/size_factors.sum()
 
 
 def compute_variance(X: sparse.csc_matrix, q: float, size_factor: np.array, group_name=None):

@@ -83,7 +83,7 @@ MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
-# VAR_VALUE_FILTER = "feature_id == 'ENSG00000135636'" #ENSG00000002330'"
+VAR_VALUE_FILTER = "feature_id == 'ENSG00000135636'" #ENSG00000002330'"
 
 # OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
@@ -127,6 +127,7 @@ def compute_all_estimators_for_gene(obs_group_name: str, gene_group: pd.DataFram
     )
 
     X_dense = data_dense.soma_data.to_numpy()
+    X_dense = np.nan_to_num(X_dense)
     size_factors_dense = size_factors_for_obs_group.approx_size_factor.to_numpy()
 
     data_sparse = data_dense[data_dense.soma_data.notna()]

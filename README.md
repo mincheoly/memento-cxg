@@ -10,7 +10,7 @@ Usage instructions:
 2. Install Python: `sudo apt install python3-venv`
 3. Setup a virtualenv and `pip install tiledbsoma`.
 4. `git clone https://github.com/mincheoly/memento-cxg.git`
-5. To run: `AWS_REGION=us-west-2 /usr/bin/time -v python ~/memento/memento/cell_census_summary_cube.py s3://cellxgene-data-public/cell-census/2023-04-04/soma/census_data/homo_sapiens 2>&1 | tee ~/memento/cell_census_summary_cube.log`
+5. To run: `AWS_REGION=us-west-2 /usr/bin/time -v python ~/memento-cxg/memento/cell_census_summary_cube.py s3://cellxgene-data-public/cell-census/2023-06-20/soma/census_data/homo_sapiens 2>&1 | tee ~/memento/cell_census_summary_cube.log`
 
 To use or inspect the results as Pandas DataFrame:
 ```
