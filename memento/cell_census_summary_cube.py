@@ -30,52 +30,48 @@ MIN_BATCH_SIZE = 2**14
 # For testing
 # MIN_BATCH_SIZE = 1000
 
-CUBE_DIMS_OBS = [
+CUBE_TILEDB_DIMS_OBS = [
     "cell_type",
     "dataset_id",
+]
+
+CUBE_TILEDB_ATTRS_OBS = [
     "assay",
     "suspension_type",
     "donor_id",
     "disease",
     "sex"
 ]
+
+CUBE_LOGICAL_DIMS_OBS = CUBE_TILEDB_DIMS_OBS + CUBE_TILEDB_ATTRS_OBS
+
 # For testing
-# CUBE_DIMS_OBS = [
-#     "celltype",
-#     "study",
-# ]
+# CUBE_LOGICAL_DIMS_OBS = CUBE_INDEXED_DIMS_OBS
 
 CUBE_DIMS_VAR = ['feature_id']
 # For testing
 # CUBE_DIMS_VAR = ['var_id']
 
-CUBE_DIMS = CUBE_DIMS_OBS + CUBE_DIMS_VAR
+CUBE_TILEDB_DIMS = CUBE_LOGICAL_DIMS_OBS + CUBE_DIMS_VAR
+
+ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
+
 
 CUBE_SCHEMA = ArraySchema(
   domain=Domain(*[
     Dim(name=dim_name, dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ]))
-    for dim_name in CUBE_DIMS
+    for dim_name in CUBE_TILEDB_DIMS_OBS
   ]),
-  attrs=[
-    Attr(name='nnz', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='n_obs', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='min', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='max', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='sum', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='mean', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='sem', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='var', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='sev', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-    Attr(name='selv', dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ])),
-  ],
+  attrs=[Attr(name=estimator_name, dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+         for estimator_name in ESTIMATOR_NAMES] +
+        [Attr(name=attr_name, dtype='ascii', nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+         for attr_name in CUBE_TILEDB_ATTRS_OBS],
   cell_order='row-major',
   tile_order='row-major',
   capacity=10000,
   sparse=True,
   allows_duplicates=True,
 )
-
-ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
 Q = 0.1  # RNA capture efficiency depending on technology
 
@@ -109,8 +105,8 @@ pd.options.display.min_rows = 40
 def compute_all_estimators_for_obs_group(obs_group, obs_df):
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
     size_factors_for_obs_group = obs_df[
-        (obs_df[CUBE_DIMS_OBS[0]] == obs_group.name[0]) &
-        (obs_df[CUBE_DIMS_OBS[1]] == obs_group.name[1])][['approx_size_factor']]
+        (obs_df[CUBE_LOGICAL_DIMS_OBS[0]] == obs_group.name[0]) &
+        (obs_df[CUBE_LOGICAL_DIMS_OBS[1]] == obs_group.name[1])][['approx_size_factor']]
     gene_groups = obs_group.groupby(CUBE_DIMS_VAR)
     estimators = gene_groups.apply(lambda gene_group: compute_all_estimators_for_gene(obs_group.name, gene_group, size_factors_for_obs_group))
     return estimators
@@ -177,9 +173,9 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
 def compute_all_estimators_for_batch_pd(X_df: pd.DataFrame, obs_df: pd.DataFrame, var_df: pd.DataFrame):
     result = (
         X_df.merge(var_df[CUBE_DIMS_VAR], left_on='soma_dim_1', right_index=True).
-        merge(obs_df[CUBE_DIMS_OBS], left_on='soma_dim_0', right_index=True).
+        merge(obs_df[CUBE_LOGICAL_DIMS_OBS], left_on='soma_dim_0', right_index=True).
         drop(columns=['soma_dim_1']).
-        groupby(CUBE_DIMS_OBS, observed=True, sort=False).
+        groupby(CUBE_LOGICAL_DIMS_OBS, observed=True, sort=False).
         apply(
             lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df)).
         rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
@@ -205,7 +201,7 @@ def sum_gene_expression_levels_by_cell(X_tbl: pa.Table, batch: int) -> pd.Series
 
 def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.DataFrame:
     obs_df = (
-        query.obs(column_names=["soma_joinid"] + CUBE_DIMS_OBS).
+        query.obs(column_names=["soma_joinid"] + CUBE_LOGICAL_DIMS_OBS).
         concat().
         to_pandas().
         set_index("soma_joinid")
@@ -235,13 +231,13 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.Da
     # Bin all sums to have fewer unique values, to speed up bootstrap computation
     obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
 
-    return obs_df[CUBE_DIMS_OBS + ['approx_size_factor']]
+    return obs_df[CUBE_LOGICAL_DIMS_OBS + ['approx_size_factor']]
 
 
 def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame, /,
                               measurement_name: str, layer: str) -> None:
     var_df = query.var().concat().to_pandas().set_index("soma_joinid")
-    obs_df = query.obs(column_names=['soma_joinid'] + CUBE_DIMS_OBS).concat().to_pandas().set_index("soma_joinid")
+    obs_df = query.obs(column_names=['soma_joinid'] + CUBE_LOGICAL_DIMS_OBS).concat().to_pandas().set_index("soma_joinid")
     obs_df = obs_df.join(size_factors[['approx_size_factor']])
 
     # accumulate into a TileDB array
@@ -250,7 +246,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     # Process X by cube rows. This ensures that estimators are computed
     # for all X data contributing to a given cube row aggregation.
     # TODO: `groups` converts categoricals to strs, which is inefficient
-    cube_obs_coords = obs_df[CUBE_DIMS_OBS].groupby(CUBE_DIMS_OBS)
+    cube_obs_coords = obs_df[CUBE_LOGICAL_DIMS_OBS].groupby(CUBE_LOGICAL_DIMS_OBS)
     cube_obs_coord_groups = cube_obs_coords.groups
 
     soma_dim_0_batch = []
@@ -308,10 +304,10 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
         result = future.result()
         if len(result) > 0:
-            tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result, mode='append')
-            logging.info(f"Pass2: Writing to estimator cube.")
+            tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result.reset_index(CUBE_TILEDB_ATTRS_OBS), mode='append')
+            logging.info("Pass 2: Writing to estimator cube.")
         else:
-            logging.warning(f"Pass 2: Batch had empty result")
+            logging.warning("Pass 2: Batch had empty result")
         logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
         logging.debug(result)
         gc.collect()
@@ -343,16 +339,16 @@ def run():
         logging.info(f"Pass 1: Processing {query.n_obs} cells and {query.n_vars} genes")
 
         if not tiledb.array_exists(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI):
-            logging.info(f"Pass 1: Compute Approx Size Factors")
+            logging.info("Pass 1: Compute Approx Size Factors")
             size_factors = pass_1_compute_size_factors(query, layer)
 
             tiledb.from_pandas(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI, size_factors.reset_index(), index_col=[0])
-            logging.info(f"Saved `obs_with_size_factor` TileDB Array")
+            logging.info("Saved `obs_with_size_factor` TileDB Array")
         else:
-            logging.info(f"Pass 1: Compute Approx Size Factors (loading from stored data)")
+            logging.info("Pass 1: Compute Approx Size Factors (loading from stored data)")
             size_factors = tiledb.open(OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI).df[:].set_index('soma_joinid')
 
-        logging.info(f"Pass 2: Compute Estimators")
+        logging.info("Pass 2: Compute Estimators")
         query = exp.axis_query(measurement_name=measurement_name,
                                obs_query=AxisQuery(value_filter=OBS_VALUE_FILTER),
                                var_query=AxisQuery(value_filter=VAR_VALUE_FILTER))
