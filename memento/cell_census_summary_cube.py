@@ -15,7 +15,7 @@ import tiledbsoma as soma
 from somacore import ExperimentAxisQuery, AxisQuery
 from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
 
-from estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance
+from .estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance
 
 ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube_test"
 
@@ -319,7 +319,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
 
 
-if __name__ == "__main__":
+def run():
     # init multiprocessing
     if multiprocessing.get_start_method(True) != "spawn":
         multiprocessing.set_start_method("spawn", True)
