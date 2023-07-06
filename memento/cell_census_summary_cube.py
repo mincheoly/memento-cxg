@@ -151,7 +151,6 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
                                          batch: int) -> pd.DataFrame:
     """Compute estimators for each gene"""
 
-    # NOTE: Requires AWS_REGION=us-west-2 env var, even though cell_census.open_soma() does not
     with soma.SparseNDArray.open(
         X_uri, 
         context=soma.SOMATileDBContext().replace(tiledb_config={
