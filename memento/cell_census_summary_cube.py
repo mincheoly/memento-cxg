@@ -1,4 +1,4 @@
-import concurrent
+import cProfile
 import gc
 import logging
 import multiprocessing
@@ -255,61 +255,64 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     n_total_cells = query.n_obs
 
     # For testing/debugging: Run pass 2 without multiprocessing
-    
-#     for soma_dim_0_ids in cube_obs_coord_groups.values():
-#         soma_dim_0_batch.extend(soma_dim_0_ids)
-#         if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
-#             continue
-#         n += 1
-#         compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
-#                                              query.experiment.ms[measurement_name].X[layer].uri, n)
-#         soma_dim_0_batch = []
-    
-#     if len(soma_dim_0_batch) > 0:
-#         n += 1
-#         compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
-#                                              query.experiment.ms[measurement_name].X[layer].uri, n)
 
-    def submit_batch(soma_dim_0_batch_):
-        nonlocal n, n_cum_cells
-        n += 1
-        n_cum_cells += len(soma_dim_0_batch_)
-        logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
-                     f"{100 * n_cum_cells / n_total_cells:0.1f}%")
-        batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
-                                             soma_dim_0_batch_,
-                                             obs_df,
-                                             var_df,
-                                             query.experiment.ms[measurement_name].X[layer].uri,
-                                             n))
+    with cProfile.Profile() as pr:
+        for soma_dim_0_ids in cube_obs_coord_groups.values():
+            soma_dim_0_batch.extend(soma_dim_0_ids)
+            if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
+                continue
+            n += 1
+            compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
+                                                 query.experiment.ms[measurement_name].X[layer].uri, n)
+            soma_dim_0_batch = []
 
-    for soma_dim_0_ids in cube_obs_coord_groups.values():
-        soma_dim_0_batch.extend(soma_dim_0_ids)
+        if len(soma_dim_0_batch) > 0:
+            n += 1
+            compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
+                                                 query.experiment.ms[measurement_name].X[layer].uri, n)
 
-        # Fetch data for multiple cube rows at once, to reduce X.read() call count
-        if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
-            continue
+        pr.dump_stats("pass_2_compute_estimators.prof")
 
-        submit_batch(soma_dim_0_batch)
-        soma_dim_0_batch = []
-
-    # Process final batch
-    if len(soma_dim_0_batch) > 0:
-        submit_batch(soma_dim_0_batch)
-
-    # Accumulate results
-
-    n_cum_cells = 0
-    for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
-        result = future.result()
-        if len(result) > 0:
-            tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result.reset_index(CUBE_TILEDB_ATTRS_OBS), mode='append')
-            logging.info("Pass 2: Writing to estimator cube.")
-        else:
-            logging.warning("Pass 2: Batch had empty result")
-        logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
-        logging.debug(result)
-        gc.collect()
+    # def submit_batch(soma_dim_0_batch_):
+    #     nonlocal n, n_cum_cells
+    #     n += 1
+    #     n_cum_cells += len(soma_dim_0_batch_)
+    #     logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
+    #                  f"{100 * n_cum_cells / n_total_cells:0.1f}%")
+    #     batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
+    #                                          soma_dim_0_batch_,
+    #                                          obs_df,
+    #                                          var_df,
+    #                                          query.experiment.ms[measurement_name].X[layer].uri,
+    #                                          n))
+    #
+    # for soma_dim_0_ids in cube_obs_coord_groups.values():
+    #     soma_dim_0_batch.extend(soma_dim_0_ids)
+    #
+    #     # Fetch data for multiple cube rows at once, to reduce X.read() call count
+    #     if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
+    #         continue
+    #
+    #     submit_batch(soma_dim_0_batch)
+    #     soma_dim_0_batch = []
+    #
+    # # Process final batch
+    # if len(soma_dim_0_batch) > 0:
+    #     submit_batch(soma_dim_0_batch)
+    #
+    # # Accumulate results
+    #
+    # n_cum_cells = 0
+    # for n, future in enumerate(concurrent.futures.as_completed(batch_futures), start=1):
+    #     result = future.result()
+    #     if len(result) > 0:
+    #         tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, result.reset_index(CUBE_TILEDB_ATTRS_OBS), mode='append')
+    #         logging.info("Pass 2: Writing to estimator cube.")
+    #     else:
+    #         logging.warning("Pass 2: Batch had empty result")
+    #     logging.info(f"Pass 2: Completed {n} of {len(batch_futures)} batches ({100 * n / len(batch_futures):0.1f}%)")
+    #     logging.debug(result)
+    #     gc.collect()
 
     logging.info(f"Pass 2: Completed [{n} of {len(batch_futures)}]")
 
