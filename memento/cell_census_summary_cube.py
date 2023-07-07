@@ -17,9 +17,9 @@ from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
 
 from .estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance
 
-ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube_test"
+ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube"
 
-OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor_test"
+OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
 TILEDB_SOMA_BUFFER_BYTES = 2**31
 # For testing
