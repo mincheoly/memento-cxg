@@ -209,11 +209,11 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.Da
 
     executor = futures.ThreadPoolExecutor()
     summing_futures = []
-    X_nnz = query._ms.X[layer].nnz
-    cum_nnz = 0
+    X_rows = query._ms.X[layer].shape[0]
+    cum_rows = 0
     for n, X_tbl in enumerate(query.X(layer).tables(), start=1):
-        cum_nnz += X_tbl.shape[0]
-        logging.info(f"Pass 1: Submitting X batch {n}, nnz={X_tbl.shape[0]}, {100 * cum_nnz / X_nnz:0.1f}%")
+        cum_rows += X_tbl.shape[0]
+        logging.info(f"Pass 1: Submitting X batch {n}, nnz={X_tbl.shape[0]}, {100 * cum_rows / X_rows:0.1f}%")
         summing_futures.append(executor.submit(sum_gene_expression_levels_by_cell, X_tbl, n))
 
     for n, summing_future in enumerate(futures.as_completed(summing_futures), start=1):
