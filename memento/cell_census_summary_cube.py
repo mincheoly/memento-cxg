@@ -17,13 +17,15 @@ from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
 
 from .estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance
 
+TEST_MODE = False
+
 ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube"
 
 OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
 TILEDB_SOMA_BUFFER_BYTES = 2**31
-# For testing
-# TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
+if TEST_MODE:
+    TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
 
 # The minimum number of cells that should be processed at a time by each child process.
 MIN_BATCH_SIZE = 2**14
@@ -43,16 +45,16 @@ CUBE_TILEDB_ATTRS_OBS = [
     "sex"
 ]
 
-# For testing
-# CUBE_TILEDB_DIMS_OBS = ["celltype"]
-# CUBE_TILEDB_ATTRS_OBS = ["study"]
+if TEST_MODE:
+    CUBE_TILEDB_DIMS_OBS = ["celltype"]
+    CUBE_TILEDB_ATTRS_OBS = ["study"]
 
 CUBE_LOGICAL_DIMS_OBS = CUBE_TILEDB_DIMS_OBS + CUBE_TILEDB_ATTRS_OBS
 
 CUBE_DIMS_VAR = ['feature_id']
 
-# For testing
-# CUBE_DIMS_VAR = ['var_id']
+if TEST_MODE:
+    CUBE_DIMS_VAR = ['var_id']
 
 CUBE_TILEDB_DIMS = CUBE_LOGICAL_DIMS_OBS + CUBE_DIMS_VAR
 
@@ -83,14 +85,14 @@ VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
 #VAR_VALUE_FILTER = "feature_id == 'ENSG00000135636'" #ENSG00000002330'"
 
-OBS_VALUE_FILTER = None
-# OBS_VALUE_FILTER = "is_primary_data == True"
+OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
 # OBS_VALUE_FILTER = "is_primary_data == True and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 # OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 
-# For testing
-#seed = 1
+if TEST_MODE:
+    OBS_VALUE_FILTER = None
+
 
 logging.basicConfig(
     format="%(asctime)s %(process)-7s %(levelname)-8s %(message)s",
