@@ -147,7 +147,7 @@ def compute_all_estimators_for_gene(obs_group_name: str, gene_group: pd.DataFram
     mean = compute_mean(X_dense, size_factors_dense)
     sem = compute_sem(X_dense, size_factors_dense)
     variance = compute_variance(X_csc, Q, size_factors_dense, group_name=group_name)
-    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=5000, group_name=group_name)
+    sev, selv = compute_sev(X_csc, Q, size_factors_dense, num_boot=500, group_name=group_name)
 
     return pd.Series(data=[nnz, n_obs, min_, max_, sum_, mean, sem, variance, sev, selv])
 
