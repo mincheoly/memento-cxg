@@ -290,7 +290,6 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
 
             pr.dump_stats(f"pass_2_compute_estimators_{n}.prof")
 
-
     else:  # use multiprocessing
         def submit_batch(soma_dim_0_batch_):
             nonlocal n, n_cum_cells
@@ -334,7 +333,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
             logging.debug(result)
             gc.collect()
 
-        logging.info(f"Pass 2: Completed")
+        logging.info("Pass 2: Completed")
 
 
 def run():
