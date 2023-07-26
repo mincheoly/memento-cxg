@@ -1,9 +1,13 @@
 import logging
+from typing import Tuple
 
+import numba
 import numpy as np
 import scipy.sparse as sparse
 import scipy.stats as stats
-
+from numba import njit
+from numpy import random
+from numpy.random import Generator
 
 RELIABILITY_THRESHOLD = 0.05
 
@@ -37,7 +41,7 @@ def fill_invalid(val, group_name):
     return val
 
 
-def unique_expr(expr, size_factor):
+def unique_expr(expr: sparse.csc_matrix, size_factor: np.array) -> Tuple[np.array, np.array, np.array]:
     """
         Find (approximately) unique combinations of expression values and size factors.
         The random component is for mapping (expr, size_factor) to a single number.
@@ -53,7 +57,7 @@ def unique_expr(expr, size_factor):
 
     expr_to_return = expr[index].toarray()
 
-    return 1 / approx_sf[index].reshape(-1, 1), 1 / approx_sf[index].reshape(-1, 1) ** 2, expr_to_return, count
+    return 1 / approx_sf[index].reshape(-1, 1), expr_to_return, count
 
 
 def compute_mean(X: np.array, size_factors: np.array):
@@ -106,16 +110,25 @@ def compute_bootstrap_variance(
         q: float,
         n_obs: int,
         inverse_size_factor: np.array,
-        inverse_size_factor_sq: np.array
 ):
     """ Compute the bootstrapped variances for a single gene expression frequencies."""
 
+    inverse_size_factor_sq = inverse_size_factor ** 2
     mm_M1 = (unique_expr * bootstrap_freq * inverse_size_factor).sum(axis=0) / n_obs
     mm_M2 = (unique_expr ** 2 * bootstrap_freq * inverse_size_factor_sq - (
                 1 - q) * unique_expr * bootstrap_freq * inverse_size_factor_sq).sum(axis=0) / n_obs
 
     variance = mm_M2 - mm_M1 ** 2
     return variance
+
+
+@njit
+def gen_multinomial(counts: np.array, n_obs: int, num_boot: int) -> np.array:
+    # reset numpy random generator
+    # TODO: why is this necessary?
+    np.random.seed(5)
+
+    return random.multinomial(n_obs, counts / counts.sum(), size=num_boot).T
 
 
 def compute_sev(
@@ -131,10 +144,9 @@ def compute_sev(
         return 0, 0
     
     n_obs = X.shape[0]
-    inv_sf, inv_sf_sq, expr, counts = unique_expr(X, approx_size_factor)
+    inv_sf, expr, counts = unique_expr(X, approx_size_factor)
 
-    gen = np.random.Generator(np.random.PCG64(5))
-    gene_rvs = gen.multinomial(n_obs, counts / counts.sum(), size=num_boot).T
+    gene_rvs = gen_multinomial(counts, n_obs, num_boot)
 
     var = compute_bootstrap_variance(
         unique_expr=expr,
@@ -142,7 +154,6 @@ def compute_sev(
         n_obs=n_obs,
         q=q,
         inverse_size_factor=inv_sf,
-        inverse_size_factor_sq=inv_sf_sq
     )
 
     var = fill_invalid(var, group_name)
