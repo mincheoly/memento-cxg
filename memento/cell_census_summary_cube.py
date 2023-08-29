@@ -58,7 +58,7 @@ CUBE_DIMS_VAR = ['feature_id']
 if TEST_MODE:
     CUBE_DIMS_VAR = ['var_id']
 
-CUBE_TILEDB_DIMS = CUBE_LOGICAL_DIMS_OBS + CUBE_DIMS_VAR
+CUBE_TILEDB_DIMS = CUBE_DIMS_VAR + CUBE_TILEDB_DIMS_OBS
 
 ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
@@ -66,12 +66,12 @@ ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 's
 CUBE_SCHEMA = ArraySchema(
   domain=Domain(*[
     Dim(name=dim_name, dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ]))
-    for dim_name in CUBE_TILEDB_DIMS_OBS
+    for dim_name in CUBE_TILEDB_DIMS
   ]),
-  attrs=[Attr(name=estimator_name, dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
-         for estimator_name in ESTIMATOR_NAMES] +
-        [Attr(name=attr_name, dtype='ascii', nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
-         for attr_name in CUBE_TILEDB_ATTRS_OBS],
+  attrs=[Attr(name=attr_name, dtype='ascii', nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+         for attr_name in CUBE_TILEDB_ATTRS_OBS] +
+        [Attr(name=estimator_name, dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+         for estimator_name in ESTIMATOR_NAMES],
   cell_order='row-major',
   tile_order='row-major',
   capacity=10000,
@@ -89,6 +89,7 @@ VAR_VALUE_FILTER = None
 
 OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
+# OBS_VALUE_FILTER = "is_primary_data == True and tissue_general == 'embryo'"
 # OBS_VALUE_FILTER = "is_primary_data == True and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 # OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 
