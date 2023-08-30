@@ -32,7 +32,7 @@ if TEST_MODE:
 # The minimum number of cells that should be processed at a time by each child process.
 MIN_BATCH_SIZE = 2**14
 # For testing
-# MIN_BATCH_SIZE = 1000
+MIN_BATCH_SIZE = 1000
 
 CUBE_TILEDB_DIMS_OBS = [
     "cell_type",
@@ -81,17 +81,18 @@ CUBE_SCHEMA = ArraySchema(
 
 Q = 0.1  # RNA capture efficiency depending on technology
 
-MAX_WORKERS = None  # None means use multiprocessing's dynamic default
+MAX_WORKERS = 6  # None means use multiprocessing's dynamic default
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
-#VAR_VALUE_FILTER = "feature_id == 'ENSG00000135636'" #ENSG00000002330'"
+# VAR_VALUE_FILTER = "feature_id == 'ENSG00000000419'" #ENSG00000002330'"
 
-OBS_VALUE_FILTER = "is_primary_data == True"
+# OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
 # OBS_VALUE_FILTER = "is_primary_data == True and tissue_general == 'embryo'"
 # OBS_VALUE_FILTER = "is_primary_data == True and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 # OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
+OBS_VALUE_FILTER = "is_primary_data == True and (cell_type == 'CD14-positive monocyte' or cell_type == 'dendritic cell') and (dataset_id == '1a2e3350-28a8-4f49-b33c-5b67ceb001f6' or dataset_id == '3faad104-2ab8-4434-816d-474d8d2641db')"
 
 if TEST_MODE:
     OBS_VALUE_FILTER = None
