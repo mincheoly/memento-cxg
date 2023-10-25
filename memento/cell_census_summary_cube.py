@@ -347,12 +347,7 @@ def run():
     layer = sys.argv[2] if len(sys.argv) > 2 else "raw"
     measurement_name = "RNA"
 
-    with soma.Experiment.open(uri=exp_uri,
-                              context=soma.SOMATileDBContext().replace(tiledb_config={
-                                  "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES,
-                                  "vfs.s3.region":"us-west-2",
-                                  "vfs.s3.no_sign_request":True})
-                              ) as exp:
+    with soma.Experiment.open(uri=exp_uri) as exp:
 
         query = exp.axis_query(measurement_name=measurement_name,
                                obs_query=AxisQuery(value_filter=OBS_VALUE_FILTER),
