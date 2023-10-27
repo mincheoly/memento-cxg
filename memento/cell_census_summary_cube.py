@@ -1,10 +1,10 @@
-import concurrent
 import gc
 import logging
 import multiprocessing
 import os
 import sys
 from concurrent import futures
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -111,8 +111,16 @@ pd.options.display.width = 1024
 pd.options.display.min_rows = 40
 
 
-def compute_all_estimators_for_obs_group(obs_group, obs_df):
+def compute_all_estimators_for_obs_group(obs_group, obs_df) -> Union[pd.DataFrame, None]:
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
+    with tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube:
+        cond_query = " and ".join([f"{dim_name}==\"{dim_value}\""
+                                   for dim_name, dim_value in zip(CUBE_LOGICAL_DIMS_OBS, obs_group.name)])
+        estimators = estimators_cube.query(cond=cond_query, attrs=None).df[:]
+        if len(estimators):
+            logging.info(f"Pass 2: Group {obs_group.name} already computed. Skipping computation.")
+            return pd.DataFrame(columns=ESTIMATOR_NAMES, data=[])
+
     size_factors_for_obs_group = obs_df[
         (obs_df[CUBE_LOGICAL_DIMS_OBS[0]] == obs_group.name[0]) &
         (obs_df[CUBE_LOGICAL_DIMS_OBS[1]] == obs_group.name[1])][['approx_size_factor']]
@@ -248,8 +256,12 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     obs_df = query.obs(column_names=['soma_joinid'] + CUBE_LOGICAL_DIMS_OBS).concat().to_pandas().set_index("soma_joinid")
     obs_df = obs_df.join(size_factors[['approx_size_factor']])
 
-    # accumulate into a TileDB array
-    tiledb.Array.create(ESTIMATORS_CUBE_ARRAY_URI, CUBE_SCHEMA, overwrite=True)
+    if tiledb.array_exists(ESTIMATORS_CUBE_ARRAY_URI):
+        logging.info("Pass 2: Resuming")
+    else:
+        # accumulate into a TileDB array
+        tiledb.Array.create(ESTIMATORS_CUBE_ARRAY_URI, CUBE_SCHEMA)
+        logging.info("Pass 2: Created new estimators cube")
 
     # Process X by cube rows. This ensures that estimators are computed
     # for all X data contributing to a given cube row aggregation.
