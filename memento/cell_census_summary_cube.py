@@ -276,7 +276,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
             batch_result = compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
                                                                 query.experiment.ms[measurement_name].X[layer].uri, n)
             if len(batch_result) > 0:
-                tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, batch_result.reset_index(CUBE_TILEDB_ATTRS_OBS), mode='append')
+                tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, batch_result.reset_index(CUBE_LOGICAL_DIMS_OBS), mode='append')
 
         with cProfile.Profile() as pr:
             for soma_dim_0_ids in cube_obs_coord_groups.values():
