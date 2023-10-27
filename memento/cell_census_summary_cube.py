@@ -172,8 +172,8 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
         X_uri, 
         context=soma.SOMATileDBContext().replace(tiledb_config={
             "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES,
-            "vfs.s3.region":"us-west-2",
-            "vfs.s3.no_sign_request":True})) as X:
+            "vfs.s3.region": "us-west-2",
+            "vfs.s3.no_sign_request": True})) as X:
         X_df = X.read(coords=(soma_dim_0, var_df.index.values)).tables().concat().to_pandas()
         logging.info(f"Pass 2: Start X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
         result = compute_all_estimators_for_batch_pd(X_df, obs_df, var_df)
@@ -194,6 +194,7 @@ def compute_all_estimators_for_batch_pd(X_df: pd.DataFrame, obs_df: pd.DataFrame
         groupby(CUBE_LOGICAL_DIMS_OBS, observed=True, sort=False).
         apply(
             lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df)).
+
         rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
     )
     return result

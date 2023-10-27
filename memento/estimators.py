@@ -1,13 +1,11 @@
 import logging
 from typing import Tuple
 
-import numba
 import numpy as np
 import scipy.sparse as sparse
 import scipy.stats as stats
 from numba import njit
 from numpy import random
-from numpy.random import Generator
 
 RELIABILITY_THRESHOLD = 0.05
 
