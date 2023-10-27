@@ -58,7 +58,7 @@ CUBE_DIMS_VAR = ['feature_id']
 if TEST_MODE:
     CUBE_DIMS_VAR = ['var_id']
 
-CUBE_TILEDB_DIMS = CUBE_DIMS_VAR + CUBE_TILEDB_DIMS_OBS
+CUBE_TILEDB_DIMS = CUBE_TILEDB_DIMS_OBS + CUBE_DIMS_VAR
 
 ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
