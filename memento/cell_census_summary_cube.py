@@ -25,7 +25,7 @@ ESTIMATORS_CUBE_ARRAY_URI = "estimators_cube"
 
 OBS_WITH_SIZE_FACTOR_TILEDB_ARRAY_URI = "obs_with_size_factor"
 
-TILEDB_SOMA_BUFFER_BYTES = 2**30 
+TILEDB_SOMA_BUFFER_BYTES = 2**31
 if TEST_MODE:
     TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
 
@@ -81,7 +81,7 @@ CUBE_SCHEMA = ArraySchema(
 
 Q = 0.1  # RNA capture efficiency depending on technology
 
-MAX_WORKERS = None  # None means use multiprocessing's dynamic default
+MAX_WORKERS = 48  # None means use multiprocessing's dynamic default
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
