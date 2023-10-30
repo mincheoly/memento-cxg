@@ -249,26 +249,6 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.Da
     return obs_df[CUBE_LOGICAL_DIMS_OBS + ['approx_size_factor']]
 
 
-def result_exists(obs_group: Tuple[str], any_var_value: str) -> bool:
-    with tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube:
-
-        # perform quick, but incomplete check for existing data
-        dim_values = obs_group[0:len(CUBE_TILEDB_DIMS_OBS)] + (any_var_value, )
-        if estimators_cube.df[dim_values].shape[0] == 0:
-            return False
-
-        # now perform full check for existing data
-        key_values = list(zip(CUBE_LOGICAL_DIMS_OBS, obs_group[0:len(CUBE_LOGICAL_DIMS_OBS)])) + \
-                     [(CUBE_DIMS_VAR[0], any_var_value)]
-        cond_query = " and ".join([f"{dim_name}==\"{dim_value}\"" for dim_name, dim_value in key_values])
-        estimators = estimators_cube.query(cond=cond_query, attrs=[]).df[:]
-
-        if len(estimators):
-            return True
-
-    return False
-
-
 def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame, /,
                               measurement_name: str, layer: str) -> None:
     var_df = query.var().concat().to_pandas().set_index("soma_joinid")
@@ -352,10 +332,13 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
                 n))
 
         # perform check for existing data
-        any_var_value = var_df.iloc[0][CUBE_DIMS_VAR[0]]
+        with (tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube):
+            df = estimators_cube.query(dims=CUBE_TILEDB_DIMS_OBS, attrs=CUBE_TILEDB_ATTRS_OBS).df[:]
+            existing_groups = df.drop_duplicates()
+            existing_groups = existing_groups.set_index(list(existing_groups.columns))
 
         for group_key, soma_dim_0_ids in cube_obs_coord_groups.items():
-            if not result_exists(group_key, any_var_value):
+            if not group_key in existing_groups.index:
                 soma_dim_0_batch.extend(soma_dim_0_ids)
             else:
                 logging.info(f"Pass 2: Group {group_key} already computed. Skipping computation.")
