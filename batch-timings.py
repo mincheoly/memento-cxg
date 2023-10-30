@@ -33,7 +33,7 @@ for line in sys.stdin:
             batch_stats[batch_id]["max_nnz"] = max(batch_stats[batch_id]["max_nnz"], nnz_active)
 
         # Store the start time and nnz value (if available)
-        batch_stats[batch_id] = {"start_time": datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S"),
+        batch_stats[batch_id] = {"start_time": datetime.strptime(timestamp.group(1), "%Y-%m-%d %H:%M:%S"),
                                  "nnz": nnz,
                                  "cells": cells,
                                  "max_nnz": nnz_active}
