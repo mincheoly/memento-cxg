@@ -12,7 +12,7 @@ cells_active = nnz_active = 0
 
 for line in sys.stdin:
     # Use regular expressions to extract relevant fields
-    timestamp = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line)
+    timestamp = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
     batch_match = re.search(r'batch (\d+)', line)
     nnz_match = re.search(r'nnz=(\d+)', line)
     cells_match = re.search(r'cells=(\d+)', line)
@@ -40,7 +40,7 @@ for line in sys.stdin:
 
     elif "End" in line:
         if batch_id in batch_stats:
-            end_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            end_time = datetime.strptime(timestamp.group(1), "%Y-%m-%d %H:%M:%S")
             elapsed_time = end_time - batch_stats[batch_id]["start_time"]
 
             cells = batch_stats[batch_id]["cells"]
