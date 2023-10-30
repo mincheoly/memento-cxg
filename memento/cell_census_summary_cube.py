@@ -4,7 +4,7 @@ import multiprocessing
 import os
 import sys
 from concurrent import futures
-from typing import Union
+from typing import Union, Tuple
 
 import numpy as np
 import pandas as pd
@@ -117,27 +117,8 @@ pd.options.display.width = 1024
 pd.options.display.min_rows = 40
 
 
-def compute_all_estimators_for_obs_group(obs_group, obs_df: pd.DataFrame, any_var_value: str) -> Union[pd.DataFrame, None]:
+def compute_all_estimators_for_obs_group(obs_group, obs_df: pd.DataFrame) -> Union[pd.DataFrame, None]:
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
-    with tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube:
-
-        # perform quick, but incomplete check for existing data
-        key_values = list(zip(CUBE_TILEDB_DIMS_OBS, obs_group.name[0:len(CUBE_TILEDB_DIMS_OBS)])) + \
-                     [(CUBE_DIMS_VAR[0], any_var_value)]
-        cond_query = " and ".join([f"{dim_name}==\"{dim_value}\"" for dim_name, dim_value in key_values])
-        estimators = estimators_cube.query(cond=cond_query, attrs=[]).df[:]
-
-        if len(estimators):
-            # now perform full check for existing data
-            key_values = list(zip(CUBE_LOGICAL_DIMS_OBS, obs_group.name[0:len(CUBE_LOGICAL_DIMS_OBS)])) + \
-                         [(CUBE_DIMS_VAR[0], any_var_value)]
-            cond_query = " and ".join([f"{dim_name}==\"{dim_value}\"" for dim_name, dim_value in key_values])
-            estimators = estimators_cube.query(cond=cond_query, attrs=[]).df[:]
-
-        if len(estimators):
-            logging.info(f"Pass 2: Group {obs_group.name} already computed. Skipping computation.")
-            return pd.DataFrame(columns=ESTIMATOR_NAMES, data=[])
-
     size_factors_for_obs_group = obs_df[
         (obs_df[CUBE_LOGICAL_DIMS_OBS[0]] == obs_group.name[0]) &
         (obs_df[CUBE_LOGICAL_DIMS_OBS[1]] == obs_group.name[1])][['approx_size_factor']]
@@ -204,14 +185,13 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
 
 
 def compute_all_estimators_for_batch_pd(X_df: pd.DataFrame, obs_df: pd.DataFrame, var_df: pd.DataFrame):
-    var_value = var_df.iloc[0][CUBE_DIMS_VAR[0]]
     result = (
         X_df.merge(var_df[CUBE_DIMS_VAR], left_on='soma_dim_1', right_index=True).
         merge(obs_df[CUBE_LOGICAL_DIMS_OBS], left_on='soma_dim_0', right_index=True).
         drop(columns=['soma_dim_1']).
         groupby(CUBE_LOGICAL_DIMS_OBS, observed=True, sort=False).
         apply(
-            lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df, var_value)).
+            lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df)).
 
         rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
     )
@@ -267,6 +247,26 @@ def pass_1_compute_size_factors(query: ExperimentAxisQuery, layer: str) -> pd.Da
     obs_df['approx_size_factor'] = bin_size_factor(obs_df['size_factor'].values)
 
     return obs_df[CUBE_LOGICAL_DIMS_OBS + ['approx_size_factor']]
+
+
+def result_exists(obs_group: Tuple[str], any_var_value: str) -> bool:
+    with tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube:
+
+        # perform quick, but incomplete check for existing data
+        dim_values = obs_group[0:len(CUBE_TILEDB_DIMS_OBS)] + (any_var_value, )
+        if estimators_cube.df[dim_values].shape[0] == 0:
+            return False
+
+        # now perform full check for existing data
+        key_values = list(zip(CUBE_LOGICAL_DIMS_OBS, obs_group[0:len(CUBE_LOGICAL_DIMS_OBS)])) + \
+                     [(CUBE_DIMS_VAR[0], any_var_value)]
+        cond_query = " and ".join([f"{dim_name}==\"{dim_value}\"" for dim_name, dim_value in key_values])
+        estimators = estimators_cube.query(cond=cond_query, attrs=[]).df[:]
+
+        if len(estimators):
+            return True
+
+    return False
 
 
 def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataFrame, /,
@@ -351,8 +351,15 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
                 X_uri,
                 n))
 
-        for soma_dim_0_ids in cube_obs_coord_groups.values():
-            soma_dim_0_batch.extend(soma_dim_0_ids)
+        # perform check for existing data
+        any_var_value = var_df.iloc[0][CUBE_DIMS_VAR[0]]
+
+        for group_key, soma_dim_0_ids in cube_obs_coord_groups.items():
+            if not result_exists(group_key, any_var_value):
+                soma_dim_0_batch.extend(soma_dim_0_ids)
+            else:
+                logging.info(f"Pass 2: Group {group_key} already computed. Skipping computation.")
+                continue
 
             # Fetch data for multiple cube rows at once, to reduce X.read() call count
             if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
