@@ -29,8 +29,8 @@ for line in sys.stdin:
         cells_active += cells
         nnz_active += nnz
 
-        for batch_id in batch_stats.keys():
-            batch_stats[batch_id]["max_nnz"] = max(batch_stats[batch_id]["max_nnz"], nnz_active)
+        for id_ in batch_stats.keys():
+            batch_stats[id_]["max_nnz"] = max(batch_stats[id_]["max_nnz"], nnz_active)
 
         # Store the start time and nnz value (if available)
         batch_stats[batch_id] = {"start_time": datetime.strptime(timestamp.group(1), "%Y-%m-%d %H:%M:%S"),
