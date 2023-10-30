@@ -320,7 +320,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
                          f"{100 * n_cum_cells / n_total_cells:0.1f}%")
 
             batch_futures.append(executor.submit(
-                len(obs_df),
+                len(soma_dim_0_batch_),
                 compute_all_estimators_for_batch_tdb,
                 soma_dim_0_batch_,
                 obs_df,
