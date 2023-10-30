@@ -17,6 +17,7 @@ from somacore import ExperimentAxisQuery, AxisQuery
 from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
 
 from .estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance, gen_multinomial
+from .mp import create_resource_pool_executor
 
 TEST_MODE = bool(os.getenv("TEST_MODE", False))  # Read data from simple test fixture Census data
 PROFILE_MODE = bool(os.getenv("PROFILE_MODE", False))  # Run pass 2 in single-process mode with profiling output
@@ -82,6 +83,11 @@ CUBE_SCHEMA = ArraySchema(
 Q = 0.1  # RNA capture efficiency depending on technology
 
 MAX_WORKERS = 48  # None means use multiprocessing's dynamic default
+# The maximum number of nnz values to be processed at any given time.
+# The multiprocessing logic will not submit new jobs while this is exceeded, thereby
+# keeping memory usage bounded. This is needed since job sizes vary considerably in
+# their memory usage, due to the number of cells that must be processed in some cases.
+MAX_NNZ = 2_000_000_000
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
@@ -273,7 +279,10 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     soma_dim_0_batch = []
     batch_futures = []
     n = n_cum_cells = 0
-    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
+
+    executor = create_resource_pool_executor(max_worker_processes=MAX_WORKERS,
+                                             max_resources=MAX_NNZ)
+
     n_total_cells = query.n_obs
 
     # For testing/debugging: Run pass 2 without multiprocessing
@@ -312,12 +321,23 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
             n_cum_cells += len(soma_dim_0_batch_)
             logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
                          f"{100 * n_cum_cells / n_total_cells:0.1f}%")
-            batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
-                                                 soma_dim_0_batch_,
-                                                 obs_df,
-                                                 var_df,
-                                                 query.experiment.ms[measurement_name].X[layer].uri,
-                                                 n))
+
+            X_uri = query.experiment.ms[measurement_name].X[layer].uri
+
+            with soma.SparseNDArray.open(
+                X_uri,
+                context=soma.SOMATileDBContext().replace(tiledb_config={
+                    "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})) as X:
+                nnz = X.nnz
+
+            batch_futures.append(executor.submit(
+                nnz,
+                compute_all_estimators_for_batch_tdb,
+                soma_dim_0_batch_,
+                obs_df,
+                var_df,
+                X_uri,
+                n))
 
         for soma_dim_0_ids in cube_obs_coord_groups.values():
             soma_dim_0_batch.extend(soma_dim_0_ids)
