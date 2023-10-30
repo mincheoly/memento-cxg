@@ -355,7 +355,7 @@ class ResourcePoolProcessExecutor(contextlib.AbstractContextManager["ResourcePoo
 
 
 def create_resource_pool_executor(
-    max_worker_processes: Optional[int] = None,
+    max_worker_processes: int = 96,
     max_resources: Optional[int] = None,
     max_workers: Optional[int] = None,
     max_tasks_per_child: Optional[int] = None,
