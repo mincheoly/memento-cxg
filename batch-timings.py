@@ -11,13 +11,8 @@ batch_stats = {}
 cells_active = nnz_active = 0
 
 for line in sys.stdin:
-    parts = line.split()
-    if len(parts) < 11:
-        continue
-
-    timestamp = " ".join(parts[:2])
-
-    # Use regular expressions to extract the batch ID and nnz value
+    # Use regular expressions to extract relevant fields
+    timestamp = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', line)
     batch_match = re.search(r'batch (\d+)', line)
     nnz_match = re.search(r'nnz=(\d+)', line)
     cells_match = re.search(r'cells=(\d+)', line)
