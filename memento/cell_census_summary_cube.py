@@ -117,12 +117,23 @@ pd.options.display.width = 1024
 pd.options.display.min_rows = 40
 
 
-def compute_all_estimators_for_obs_group(obs_group, obs_df) -> Union[pd.DataFrame, None]:
+def compute_all_estimators_for_obs_group(obs_group, obs_df: pd.DataFrame, any_var_value: str) -> Union[pd.DataFrame, None]:
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
     with tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube:
-        cond_query = " and ".join([f"{dim_name}==\"{dim_value}\""
-                                   for dim_name, dim_value in zip(CUBE_LOGICAL_DIMS_OBS, obs_group.name)])
-        estimators = estimators_cube.query(cond=cond_query, attrs=None).df[:]
+
+        # perform quick, but incomplete check for existing data
+        key_values = list(zip(CUBE_TILEDB_DIMS_OBS, obs_group.name[0:len(CUBE_TILEDB_DIMS_OBS)])) + \
+                     [(CUBE_DIMS_VAR[0], any_var_value)]
+        cond_query = " and ".join([f"{dim_name}==\"{dim_value}\"" for dim_name, dim_value in key_values])
+        estimators = estimators_cube.query(cond=cond_query, attrs=[]).df[:]
+
+        if len(estimators):
+            # now perform full check for existing data
+            key_values = list(zip(CUBE_LOGICAL_DIMS_OBS, obs_group.name[0:len(CUBE_LOGICAL_DIMS_OBS)])) + \
+                         [(CUBE_DIMS_VAR[0], any_var_value)]
+            cond_query = " and ".join([f"{dim_name}==\"{dim_value}\"" for dim_name, dim_value in key_values])
+            estimators = estimators_cube.query(cond=cond_query, attrs=[]).df[:]
+
         if len(estimators):
             logging.info(f"Pass 2: Group {obs_group.name} already computed. Skipping computation.")
             return pd.DataFrame(columns=ESTIMATOR_NAMES, data=[])
@@ -193,13 +204,14 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
 
 
 def compute_all_estimators_for_batch_pd(X_df: pd.DataFrame, obs_df: pd.DataFrame, var_df: pd.DataFrame):
+    var_value = var_df.iloc[0][CUBE_DIMS_VAR[0]]
     result = (
         X_df.merge(var_df[CUBE_DIMS_VAR], left_on='soma_dim_1', right_index=True).
         merge(obs_df[CUBE_LOGICAL_DIMS_OBS], left_on='soma_dim_0', right_index=True).
         drop(columns=['soma_dim_1']).
         groupby(CUBE_LOGICAL_DIMS_OBS, observed=True, sort=False).
         apply(
-            lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df)).
+            lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df, var_value)).
 
         rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
     )
