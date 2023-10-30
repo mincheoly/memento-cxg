@@ -8,9 +8,6 @@ output_lines = []
 # Dictionary to store start times and nnz values of batch processes
 batch_stats = {}
 
-# Dictionary to store the maximum nnz value observed by each batch process during its execution
-max_nnz_active = {}
-
 cells_active = nnz_active = 0
 
 for line in sys.stdin:
@@ -53,6 +50,7 @@ for line in sys.stdin:
 
             cells = batch_stats[batch_id]["cells"]
             nnz = batch_stats[batch_id]["nnz"]
+            max_nnz = batch_stats[batch_id]['max_nnz']
 
             cells_active -= cells
             nnz_active -= nnz
@@ -65,7 +63,7 @@ for line in sys.stdin:
             output_line = (f"Batch {batch_id}: Elapsed time: {elapsed_time}, "
                            f"cells: {cells}, cells/sec: {cells_per_second:.2f}, "
                            f"nnz: {(nnz / 1000000):.2f}M, nnz/sec: {nnz_per_second:.2f}, "
-                           f"max_nnz_active: {(max_nnz_active[batch_id] / 1000000):.2f}M ")
+                           f"max_nnz_active: {(max_nnz / 1000000):.2f}M ")
             output_lines.append((elapsed_time, output_line))
             del batch_stats[batch_id]
 
