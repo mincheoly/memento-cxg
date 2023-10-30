@@ -274,7 +274,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     batch_futures = []
     n = n_cum_cells = 0
 
-    executor = create_resource_pool_executor(max_worker_processes=MAX_WORKERS,
+    executor = create_resource_pool_executor(max_workers=MAX_WORKERS,
                                              max_resources=MAX_CELLS)
 
     n_total_cells = query.n_obs
