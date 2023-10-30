@@ -39,7 +39,7 @@ for line in sys.stdin:
         start_times[batch_id] = {"start_time": datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S"), "nnz_value": nnz_match.group(1) if nnz_match else None}
         cells_active += cells
         nnz_active += nnz
-        for batch_id in max_nnz_active:
+        for batch_id in max_nnz_active.keys():
             max_nnz_active[batch_id] = max(max_nnz_active[batch_id], nnz_active)
         max_nnz_active[batch_id] = max(max_nnz_active[batch_id], nnz_active)
 
