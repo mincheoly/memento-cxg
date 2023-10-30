@@ -41,7 +41,7 @@ for line in sys.stdin:
         nnz_active += nnz
         for batch_id in max_nnz_active.keys():
             max_nnz_active[batch_id] = max(max_nnz_active[batch_id], nnz_active)
-        max_nnz_active[batch_id] = max(max_nnz_active[batch_id], nnz_active)
+        max_nnz_active[batch_id] = nnz_active
 
     elif "End" in line:
         if batch_id in start_times:
