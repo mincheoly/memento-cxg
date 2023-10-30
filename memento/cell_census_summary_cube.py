@@ -87,7 +87,7 @@ MAX_WORKERS = 48  # None means use multiprocessing's dynamic default
 # The multiprocessing logic will not submit new jobs while this is exceeded, thereby
 # keeping memory usage bounded. This is needed since job sizes vary considerably in
 # their memory usage, due to the number of cells that must be processed in some cases.
-MAX_NNZ = 2_000_000_000
+MAX_CELLS = 512_000
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
@@ -273,7 +273,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     n = n_cum_cells = 0
 
     executor = create_resource_pool_executor(max_worker_processes=MAX_WORKERS,
-                                             max_resources=MAX_NNZ)
+                                             max_resources=MAX_CELLS)
 
     n_total_cells = query.n_obs
 
@@ -314,17 +314,11 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
 
             X_uri = query.experiment.ms[measurement_name].X[layer].uri
 
-            with soma.SparseNDArray.open(
-                X_uri,
-                context=soma.SOMATileDBContext().replace(tiledb_config={
-                    "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})) as X:
-                nnz = X.nnz
-
-            logging.info(f"Pass 2: Submitting cells batch {n}, nnz={nnz}, cells={len(soma_dim_0_batch)}, "
+            logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch_)}, "
                          f"{100 * n_cum_cells / n_total_cells:0.1f}%")
 
             batch_futures.append(executor.submit(
-                nnz,
+                len(obs_df),
                 compute_all_estimators_for_batch_tdb,
                 soma_dim_0_batch_,
                 obs_df,
