@@ -4,7 +4,7 @@ import multiprocessing
 import os
 import sys
 from concurrent import futures
-from typing import Union, Tuple
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -311,8 +311,6 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
             nonlocal n, n_cum_cells
             n += 1
             n_cum_cells += len(soma_dim_0_batch_)
-            logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
-                         f"{100 * n_cum_cells / n_total_cells:0.1f}%")
 
             X_uri = query.experiment.ms[measurement_name].X[layer].uri
 
@@ -321,6 +319,9 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
                 context=soma.SOMATileDBContext().replace(tiledb_config={
                     "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES})) as X:
                 nnz = X.nnz
+
+            logging.info(f"Pass 2: Submitting cells batch {n}, nnz={nnz}, cells={len(soma_dim_0_batch)}, "
+                         f"{100 * n_cum_cells / n_total_cells:0.1f}%")
 
             batch_futures.append(executor.submit(
                 nnz,
