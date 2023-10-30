@@ -6,7 +6,7 @@ import re
 output_lines = []
 
 # Dictionary to store start times and nnz values of batch processes
-start_times = {}
+batch_stats = {}
 
 # Dictionary to store the maximum nnz value observed by each batch process during its execution
 max_nnz_active = {}
@@ -30,23 +30,32 @@ for line in sys.stdin:
     else:
         continue
 
-    if "Start" in line or "End" in line:
-        cells = int(cells_match.group(1)) if cells_match else None
-        nnz = int(nnz_match.group(1)) if nnz_match else None
-
     if "Start" in line:
-        # Store the start time and nnz value (if available)
-        start_times[batch_id] = {"start_time": datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S"), "nnz_value": nnz_match.group(1) if nnz_match else None}
+        cells = int(cells_match.group(1)) if cells_match else 0
+        nnz = int(nnz_match.group(1)) if nnz_match else 0
+
         cells_active += cells
         nnz_active += nnz
-        for batch_id in max_nnz_active.keys():
-            max_nnz_active[batch_id] = max(max_nnz_active[batch_id], nnz_active)
-        max_nnz_active[batch_id] = nnz_active
+
+        for batch_id in batch_stats.keys():
+            batch_stats[batch_id]["max_nnz"] = max(batch_stats[batch_id]["max_nnz"], nnz_active)
+
+        # Store the start time and nnz value (if available)
+        batch_stats[batch_id] = {"start_time": datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S"),
+                                 "nnz": nnz,
+                                 "cells": cells,
+                                 "max_nnz": nnz_active}
 
     elif "End" in line:
-        if batch_id in start_times:
+        if batch_id in batch_stats:
             end_time = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-            elapsed_time = end_time - start_times[batch_id]["start_time"]
+            elapsed_time = end_time - batch_stats[batch_id]["start_time"]
+
+            cells = batch_stats[batch_id]["cells"]
+            nnz = batch_stats[batch_id]["nnz"]
+
+            cells_active -= cells
+            nnz_active -= nnz
 
             # Calculate rates
             nnz_per_second = nnz / elapsed_time.total_seconds() if nnz else None
@@ -58,8 +67,7 @@ for line in sys.stdin:
                            f"nnz: {(nnz / 1000000):.2f}M, nnz/sec: {nnz_per_second:.2f}, "
                            f"max_nnz_active: {(max_nnz_active[batch_id] / 1000000):.2f}M ")
             output_lines.append((elapsed_time, output_line))
-            del start_times[batch_id]
-            del max_nnz_active[batch_id]
+            del batch_stats[batch_id]
 
 # Sort the output lines by elapsed time (lowest first)
 output_lines.sort()
