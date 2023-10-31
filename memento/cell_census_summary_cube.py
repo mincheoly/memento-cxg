@@ -31,7 +31,7 @@ if TEST_MODE:
     TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
 
 # The minimum number of cells that should be processed at a time by each child process.
-MIN_BATCH_SIZE = 2**14
+MIN_BATCH_SIZE = 2**13
 if TEST_MODE:
     MIN_BATCH_SIZE = 1000
 
