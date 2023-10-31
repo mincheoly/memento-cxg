@@ -11,8 +11,14 @@ Usage instructions:
 3. Setup a virtualenv and `pip install tiledbsoma psutil`.
 4. `git clone https://github.com/mincheoly/memento-cxg.git`
 5. To run: `/usr/bin/time -v python -m ~/memento-cxg/memento s3://cellxgene-data-public/cell-census/2023-10-23/soma/census_data/homo_sapiens 2>&1 | tee ~/memento/cell_census_summary_cube.log`.
+6. Consolidate the estimator cube:
+```python
+import tiledb
+tdb.consolidate('estimators_cube')
+tdb.vacuum('estimators_cube')
+```
 
-Optionally, but recommended for improved performance, replace step with:
+Optionally, but recommended for improved performance, replace step 5 with:
 5.a. Download the Census to local filesystem: `sudo aws s3 --no-sign-request sync s3://cellxgene-data-public/cell-census/2023-10-23/soma/ <LOCAL_PATH_TO_CENSUS_SOMA>`
 5.b. To run: `/usr/bin/time -v python -m ~/memento-cxg/memento <LOCAL_PATH_TO_CENSUS_SOMA>/census_data/homo_sapiens 2>&1 | tee ~/memento/cell_census_summary_cube.log`.
 
