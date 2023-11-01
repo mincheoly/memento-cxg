@@ -92,11 +92,11 @@ Q = 0.1  # RNA capture efficiency depending on technology
 
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
-# The maximum number of cells values to be processed at any given time (X nnz per batch is a better metric due to
+# The maximum number of cells values to be processed at any given time ("X nnz per batch" would be a better metric due to
 # differences in X sparsity across cells, but it is not efficient to compute). The multiprocessing logic will not
 # submit new jobs while this value is exceeded, thereby keeping memory usage bounded. This is needed since job sizes
 # vary considerably in their memory usage, due to the high cell count of some batches (if batch sizes were not highly
-# variables, we could just limit by process/worker count).
+# variable, we could just limit by process/worker count).
 MAX_CELLS = 512_000
 
 VAR_VALUE_FILTER = None
