@@ -14,7 +14,7 @@ import scipy.sparse
 import tiledb
 import tiledbsoma as soma
 from somacore import ExperimentAxisQuery, AxisQuery
-from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
+from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList, DictionaryFilter, ByteShuffleFilter
 
 from .estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance, gen_multinomial
 from .mp import create_resource_pool_executor
@@ -66,12 +66,20 @@ ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 's
 
 CUBE_SCHEMA = ArraySchema(
   domain=Domain(*[
-    Dim(name=dim_name, dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ]))
+    Dim(name=dim_name, dtype="ascii", filters=FilterList([
+        DictionaryFilter(),
+        ZstdFilter(level=19)]))
     for dim_name in CUBE_TILEDB_DIMS
   ]),
-  attrs=[Attr(name=attr_name, dtype='ascii', nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+  attrs=[Attr(name=attr_name, dtype='ascii', nullable=False,
+              filters=FilterList([
+                  DictionaryFilter(),
+                  ZstdFilter(level=19)]))
          for attr_name in CUBE_TILEDB_ATTRS_OBS] +
-        [Attr(name=estimator_name, dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+        [Attr(name=estimator_name, dtype='float64', var=False, nullable=False,
+              filters=FilterList([
+                  ByteShuffleFilter(),
+                  ZstdFilter(level=5)]))
          for estimator_name in ESTIMATOR_NAMES],
   cell_order='row-major',
   tile_order='row-major',
