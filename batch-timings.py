@@ -31,12 +31,14 @@ for line in sys.stdin:
 
         for id_ in batch_stats.keys():
             batch_stats[id_]["max_nnz"] = max(batch_stats[id_]["max_nnz"], nnz_active)
+            batch_stats[id_]["max_cells"] = max(batch_stats[id_]["max_cells"], cells_active)
 
         # Store the start time and nnz value (if available)
         batch_stats[batch_id] = {"start_time": datetime.strptime(timestamp.group(1), "%Y-%m-%d %H:%M:%S"),
                                  "nnz": nnz,
                                  "cells": cells,
-                                 "max_nnz": nnz_active}
+                                 "max_nnz": nnz_active,
+                                 "max_cells": cells_active}
 
     elif "End" in line:
         if batch_id in batch_stats:
@@ -46,6 +48,7 @@ for line in sys.stdin:
             cells = batch_stats[batch_id]["cells"]
             nnz = batch_stats[batch_id]["nnz"]
             max_nnz = batch_stats[batch_id]['max_nnz']
+            max_cells = batch_stats[batch_id]['max_cells']
 
             cells_active -= cells
             nnz_active -= nnz
@@ -58,12 +61,14 @@ for line in sys.stdin:
             output_line = (f"Batch {batch_id}: Elapsed time: {elapsed_time}, "
                            f"cells: {cells}, cells/sec: {cells_per_second:.2f}, "
                            f"nnz: {(nnz / 1000000):.2f}M, nnz/sec: {nnz_per_second:.2f}, "
-                           f"max_nnz_active: {(max_nnz / 1000000):.2f}M ")
+                           f"nnz/cell: {(nnz/cells):.1f}, "
+                           f"max_nnz_active: {(max_nnz / 1000000):.2f}M, "
+                           f"max_cells_active: {max_cells} ")
             output_lines.append((elapsed_time, output_line))
             del batch_stats[batch_id]
 
 # Sort the output lines by elapsed time (lowest first)
-output_lines.sort()
+output_lines.sort(key=lambda l: l[0])
 
 # Print the sorted output
 for _, output_line in output_lines:
