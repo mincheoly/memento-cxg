@@ -1,10 +1,10 @@
-import concurrent
 import gc
 import logging
 import multiprocessing
 import os
 import sys
 from concurrent import futures
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -14,9 +14,10 @@ import scipy.sparse
 import tiledb
 import tiledbsoma as soma
 from somacore import ExperimentAxisQuery, AxisQuery
-from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList
+from tiledb import ZstdFilter, ArraySchema, Domain, Dim, Attr, FilterList, DictionaryFilter, ByteShuffleFilter
 
 from .estimators import compute_mean, compute_sem, bin_size_factor, compute_sev, compute_variance, gen_multinomial
+from .mp import create_resource_pool_executor
 
 TEST_MODE = bool(os.getenv("TEST_MODE", False))  # Read data from simple test fixture Census data
 PROFILE_MODE = bool(os.getenv("PROFILE_MODE", False))  # Run pass 2 in single-process mode with profiling output
@@ -30,9 +31,9 @@ if TEST_MODE:
     TILEDB_SOMA_BUFFER_BYTES = 10 * 1024 ** 2
 
 # The minimum number of cells that should be processed at a time by each child process.
-MIN_BATCH_SIZE = 2**14
-# For testing
-MIN_BATCH_SIZE = 1000
+MIN_BATCH_SIZE = 2**13
+if TEST_MODE:
+    MIN_BATCH_SIZE = 1000
 
 CUBE_TILEDB_DIMS_OBS = [
     "cell_type",
@@ -58,19 +59,27 @@ CUBE_DIMS_VAR = ['feature_id']
 if TEST_MODE:
     CUBE_DIMS_VAR = ['var_id']
 
-CUBE_TILEDB_DIMS = CUBE_DIMS_VAR + CUBE_TILEDB_DIMS_OBS
+CUBE_TILEDB_DIMS = CUBE_TILEDB_DIMS_OBS + CUBE_DIMS_VAR
 
 ESTIMATOR_NAMES = ['nnz', 'n_obs', 'min', 'max', 'sum', 'mean', 'sem', 'var', 'sev', 'selv']
 
 
 CUBE_SCHEMA = ArraySchema(
   domain=Domain(*[
-    Dim(name=dim_name, dtype="ascii", filters=FilterList([ZstdFilter(level=-1), ]))
+    Dim(name=dim_name, dtype="ascii", filters=FilterList([
+        DictionaryFilter(),
+        ZstdFilter(level=19)]))
     for dim_name in CUBE_TILEDB_DIMS
   ]),
-  attrs=[Attr(name=attr_name, dtype='ascii', nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+  attrs=[Attr(name=attr_name, dtype='ascii', nullable=False,
+              filters=FilterList([
+                  DictionaryFilter(),
+                  ZstdFilter(level=19)]))
          for attr_name in CUBE_TILEDB_ATTRS_OBS] +
-        [Attr(name=estimator_name, dtype='float64', var=False, nullable=False, filters=FilterList([ZstdFilter(level=-1), ]))
+        [Attr(name=estimator_name, dtype='float64', var=False, nullable=False,
+              filters=FilterList([
+                  ByteShuffleFilter(),
+                  ZstdFilter(level=5)]))
          for estimator_name in ESTIMATOR_NAMES],
   cell_order='row-major',
   tile_order='row-major',
@@ -81,18 +90,25 @@ CUBE_SCHEMA = ArraySchema(
 
 Q = 0.1  # RNA capture efficiency depending on technology
 
-MAX_WORKERS = 6  # None means use multiprocessing's dynamic default
+MAX_WORKERS = None  # None means use multiprocessing's dynamic default
+
+# The maximum number of cells values to be processed at any given time ("X nnz per batch" would be a better metric due to
+# differences in X sparsity across cells, but it is not efficient to compute). The multiprocessing logic will not
+# submit new jobs while this value is exceeded, thereby keeping memory usage bounded. This is needed since job sizes
+# vary considerably in their memory usage, due to the high cell count of some batches (if batch sizes were not highly
+# variable, we could just limit by process/worker count).
+MAX_CELLS = 512_000
 
 VAR_VALUE_FILTER = None
 # For testing. Note this only affects pass 2, since all genes must be considered when computing size factors in pass 1.
 # VAR_VALUE_FILTER = "feature_id == 'ENSG00000000419'" #ENSG00000002330'"
 
-# OBS_VALUE_FILTER = "is_primary_data == True"
+OBS_VALUE_FILTER = "is_primary_data == True"
 # For testing
 # OBS_VALUE_FILTER = "is_primary_data == True and tissue_general == 'embryo'"
 # OBS_VALUE_FILTER = "is_primary_data == True and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
 # OBS_VALUE_FILTER = "is_primary_data == True and cell_type == 'CD14-positive monocyte' and dataset_id ==  '86282760-5099-4c71-8cdd-412dcbbbd0b9'"
-OBS_VALUE_FILTER = "is_primary_data == True and (cell_type == 'CD14-positive monocyte' or cell_type == 'dendritic cell') and (dataset_id == '1a2e3350-28a8-4f49-b33c-5b67ceb001f6' or dataset_id == '3faad104-2ab8-4434-816d-474d8d2641db')"
+# OBS_VALUE_FILTER = "is_primary_data == True and (cell_type == 'CD14-positive monocyte' or cell_type == 'dendritic cell') and (dataset_id == '1a2e3350-28a8-4f49-b33c-5b67ceb001f6' or dataset_id == '3faad104-2ab8-4434-816d-474d8d2641db')"
 
 if TEST_MODE:
     OBS_VALUE_FILTER = None
@@ -111,7 +127,7 @@ pd.options.display.width = 1024
 pd.options.display.min_rows = 40
 
 
-def compute_all_estimators_for_obs_group(obs_group, obs_df):
+def compute_all_estimators_for_obs_group(obs_group, obs_df: pd.DataFrame) -> Union[pd.DataFrame, None]:
     """Computes all estimators for a given {cell type, dataset} group of expression values"""
     size_factors_for_obs_group = obs_df[
         (obs_df[CUBE_LOGICAL_DIMS_OBS[0]] == obs_group.name[0]) &
@@ -164,8 +180,8 @@ def compute_all_estimators_for_batch_tdb(soma_dim_0, obs_df: pd.DataFrame, var_d
         X_uri, 
         context=soma.SOMATileDBContext().replace(tiledb_config={
             "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES,
-            "vfs.s3.region":"us-west-2",
-            "vfs.s3.no_sign_request":True})) as X:
+            "vfs.s3.region": "us-west-2",
+            "vfs.s3.no_sign_request": True})) as X:
         X_df = X.read(coords=(soma_dim_0, var_df.index.values)).tables().concat().to_pandas()
         logging.info(f"Pass 2: Start X batch {batch}, cells={len(soma_dim_0)}, nnz={len(X_df)}")
         result = compute_all_estimators_for_batch_pd(X_df, obs_df, var_df)
@@ -186,6 +202,7 @@ def compute_all_estimators_for_batch_pd(X_df: pd.DataFrame, obs_df: pd.DataFrame
         groupby(CUBE_LOGICAL_DIMS_OBS, observed=True, sort=False).
         apply(
             lambda obs_group: compute_all_estimators_for_obs_group(obs_group, obs_df)).
+
         rename(mapper=dict(enumerate(ESTIMATOR_NAMES)), axis=1)
     )
     return result
@@ -248,8 +265,12 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     obs_df = query.obs(column_names=['soma_joinid'] + CUBE_LOGICAL_DIMS_OBS).concat().to_pandas().set_index("soma_joinid")
     obs_df = obs_df.join(size_factors[['approx_size_factor']])
 
-    # accumulate into a TileDB array
-    tiledb.Array.create(ESTIMATORS_CUBE_ARRAY_URI, CUBE_SCHEMA, overwrite=True)
+    if tiledb.array_exists(ESTIMATORS_CUBE_ARRAY_URI):
+        logging.info("Pass 2: Resuming")
+    else:
+        # accumulate into a TileDB array
+        tiledb.Array.create(ESTIMATORS_CUBE_ARRAY_URI, CUBE_SCHEMA)
+        logging.info("Pass 2: Created new estimators cube")
 
     # Process X by cube rows. This ensures that estimators are computed
     # for all X data contributing to a given cube row aggregation.
@@ -260,7 +281,10 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
     soma_dim_0_batch = []
     batch_futures = []
     n = n_cum_cells = 0
-    executor = futures.ProcessPoolExecutor(max_workers=MAX_WORKERS)
+
+    executor = create_resource_pool_executor(max_workers=MAX_WORKERS,
+                                             max_resources=MAX_CELLS)
+
     n_total_cells = query.n_obs
 
     # For testing/debugging: Run pass 2 without multiprocessing
@@ -276,7 +300,7 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
             batch_result = compute_all_estimators_for_batch_tdb(soma_dim_0_batch, obs_df, var_df,
                                                                 query.experiment.ms[measurement_name].X[layer].uri, n)
             if len(batch_result) > 0:
-                tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, batch_result.reset_index(CUBE_TILEDB_ATTRS_OBS), mode='append')
+                tiledb.from_pandas(ESTIMATORS_CUBE_ARRAY_URI, batch_result.reset_index(CUBE_LOGICAL_DIMS_OBS), mode='append')
 
         with cProfile.Profile() as pr:
             for soma_dim_0_ids in cube_obs_coord_groups.values():
@@ -297,17 +321,33 @@ def pass_2_compute_estimators(query: ExperimentAxisQuery, size_factors: pd.DataF
             nonlocal n, n_cum_cells
             n += 1
             n_cum_cells += len(soma_dim_0_batch_)
-            logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch)}, "
-                         f"{100 * n_cum_cells / n_total_cells:0.1f}%")
-            batch_futures.append(executor.submit(compute_all_estimators_for_batch_tdb,
-                                                 soma_dim_0_batch_,
-                                                 obs_df,
-                                                 var_df,
-                                                 query.experiment.ms[measurement_name].X[layer].uri,
-                                                 n))
 
-        for soma_dim_0_ids in cube_obs_coord_groups.values():
-            soma_dim_0_batch.extend(soma_dim_0_ids)
+            X_uri = query.experiment.ms[measurement_name].X[layer].uri
+
+            logging.info(f"Pass 2: Submitting cells batch {n}, cells={len(soma_dim_0_batch_)}, "
+                         f"{100 * n_cum_cells / n_total_cells:0.1f}%")
+
+            batch_futures.append(executor.submit(
+                len(soma_dim_0_batch_),
+                compute_all_estimators_for_batch_tdb,
+                soma_dim_0_batch_,
+                obs_df,
+                var_df,
+                X_uri,
+                n))
+
+        # perform check for existing data
+        with (tiledb.open(ESTIMATORS_CUBE_ARRAY_URI, mode='r') as estimators_cube):
+            df = estimators_cube.query(dims=CUBE_TILEDB_DIMS_OBS, attrs=CUBE_TILEDB_ATTRS_OBS).df[:]
+            existing_groups = df.drop_duplicates()
+            existing_groups = existing_groups.set_index(list(existing_groups.columns))
+
+        for group_key, soma_dim_0_ids in cube_obs_coord_groups.items():
+            if not group_key in existing_groups.index:
+                soma_dim_0_batch.extend(soma_dim_0_ids)
+            else:
+                logging.info(f"Pass 2: Group {group_key} already computed. Skipping computation.")
+                continue
 
             # Fetch data for multiple cube rows at once, to reduce X.read() call count
             if len(soma_dim_0_batch) < MIN_BATCH_SIZE:
@@ -347,12 +387,7 @@ def run():
     layer = sys.argv[2] if len(sys.argv) > 2 else "raw"
     measurement_name = "RNA"
 
-    with soma.Experiment.open(uri=exp_uri,
-                              context=soma.SOMATileDBContext().replace(tiledb_config={
-                                  "soma.init_buffer_bytes": TILEDB_SOMA_BUFFER_BYTES,
-                                  "vfs.s3.region":"us-west-2",
-                                  "vfs.s3.no_sign_request":True})
-                              ) as exp:
+    with soma.Experiment.open(uri=exp_uri) as exp:
 
         query = exp.axis_query(measurement_name=measurement_name,
                                obs_query=AxisQuery(value_filter=OBS_VALUE_FILTER),
