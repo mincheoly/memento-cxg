@@ -1,24 +1,24 @@
 #!/usr/bin/env python
 import sys
+from typing import List
 
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
 import tiledb
 
-from memento.cell_census_summary_cube import CUBE_TILEDB_ATTRS_OBS
+from memento.cell_census_summary_cube import CUBE_TILEDB_ATTRS_OBS, CUBE_LOGICAL_DIMS_OBS
 
 # Running actual hypothesis test with pre-computed standard errors
 
 DE_TREATMENT = 'cell_type'
 DE_COVARIATES = ['dataset_id', 'donor_id', 'assay']
-DE_VARIABLES = [DE_TREATMENT] + DE_COVARIATES
 
 
 def run(cube_path_: str, filter_: str) -> pd.DataFrame:
     estimators_df = query_estimators(cube_path_, filter_)
 
-    cell_counts, design, features, mean, se_mean = setup(estimators_df)
+    cell_counts, design, features, mean, se_mean = setup(estimators_df, DE_TREATMENT, DE_COVARIATES)
     result = compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
 
     return result
@@ -29,10 +29,10 @@ def query_estimators(cube_path_, filter_) -> pd.DataFrame:
         estimators_df = estimators.query(cond=filter_,
                                          attrs=CUBE_TILEDB_ATTRS_OBS + ['mean', 'sem', 'var', 'selv', 'n_obs']).df[:]
 
-        # convert Pandas columns to `category`, as memory optimization
-        for name, dtype in zip(estimators_df.columns, estimators_df.dtypes):
-            if dtype == 'object':
-                estimators_df[name] = estimators_df[name].astype('category')
+        # TODO: convert Pandas columns to `category`, as memory optimization (shouldn't be needed if upgrade census/tiledb-soma versions)
+        # for name, dtype in zip(estimators_df.columns, estimators_df.dtypes):
+        #     if dtype == 'object':
+        #         estimators_df[name] = estimators_df[name].astype('category')
         return estimators_df
 
 
@@ -72,14 +72,17 @@ def compute_hypothesis_test(cell_counts, design, features, mean, se_mean) -> pd.
 #
 #     return cell_counts, design, features, mean, se_mean
 
-def setup(estimators):
-    names = estimators[DE_TREATMENT].copy()
-    for col in DE_COVARIATES:
+def setup(estimators, treatment: str, covariates: List[str]):
+    variables = [treatment] + covariates
+    assert all([v in CUBE_LOGICAL_DIMS_OBS for v in variables])
+
+    names = estimators[treatment].copy()
+    for col in covariates:
         names += '_' + estimators[col]
     estimators['group_name'] = names.tolist()
     features = estimators['feature_id'].drop_duplicates().tolist()
     groups = estimators.drop_duplicates(subset='group_name').set_index('group_name')
-    design = pd.get_dummies(groups[DE_VARIABLES], drop_first=True).astype(int)
+    design = pd.get_dummies(groups[variables], drop_first=True).astype(int)
     cell_counts = groups['n_obs'].sort_index().values
 
     # TODO: Is it valid to aggregate `mean` and `sem` using `mean` func?
@@ -121,7 +124,6 @@ if __name__ == '__main__':
     if len(sys.argv) < 4:
         print('Usage: python hypothesis_test.py <filter_1> <cube_path> <csv_output_path>')
         sys.exit(1)
-
 
     filter_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:4]
 
