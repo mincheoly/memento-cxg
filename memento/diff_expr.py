@@ -122,7 +122,7 @@ def de_wls(X, y, n, v):
 if __name__ == '__main__':
 
     if len(sys.argv) < 4:
-        print('Usage: python hypothesis_test.py <filter_1> <cube_path> <csv_output_path>')
+        print('Usage: python diff_expr.py <filter_1> <cube_path> <csv_output_path>')
         sys.exit(1)
 
     filter_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:4]
