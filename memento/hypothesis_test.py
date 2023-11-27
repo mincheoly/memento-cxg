@@ -27,89 +27,13 @@ def run(cube_path_: str, filter_1: str, filter_2: str) -> Tuple[pd.DataFrame]:
             if dtype == 'object':
                 df[name] = df[name].astype('category')
 
-    # the method from git@github.com:yelabucsf/scrna-parameter-estimation.git
-    # result_1 = compute_cxg_pvalues(cell_type_1_df=ct1_df, cell_type_2_df=ct2_df)
-    result_1 = None
-
     # the method from hypothesis_test.ipynb
     # TODO: This method only takes 1 set of cells!?
     estimators = pd.concat([ct1_df, ct2_df])
     cell_counts, design, features, mean, se_mean = setup(estimators)
-    result_2 = compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
+    result = compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
 
-    return result_1, result_2
-
-
-#
-# The below code section is adapted from
-# https://github.com/yelabucsf/scrna-parameter-estimation/blob/master/lupus/cxg_comparison/cellxgene_comparison.ipynb
-#
-
-def compute_cxg_pvalues(cell_type_1_df: pd.DataFrame, cell_type_2_df: pd.DataFrame) -> pd.DataFrame:
-    def _fit_mv_regressor(mean, var):
-        """
-            Perform regression of the variance against the mean.
-        """
-
-        cond = (mean > 0) & (var > 0)
-        m, v = np.log(mean[cond]), np.log(var[cond])
-
-        poly = np.polyfit(m, v, 2)
-        return poly
-        #f = np.poly1d(z)
-
-    def _residual_variance(mean, var, mv_fit):
-        cond = (mean > 0) & (var > 0)
-        rv = np.zeros(mean.shape) * np.nan
-
-        f = np.poly1d(mv_fit)
-        with np.errstate(invalid='ignore'):
-            rv[cond] = np.exp(np.log(var[cond]) - f(np.log(mean[cond])))
-        return rv
-
-    def compute_residual_variance(df):
-        m = df['mean']
-        v = df['var']
-        mv_fit = _fit_mv_regressor(m, v)
-        rv = _residual_variance(m, v, mv_fit)
-        df['res_var'] = rv
-
-    compute_residual_variance(cell_type_1_df)
-    compute_residual_variance(cell_type_2_df)
-
-    # TODO: This merge operation only makes sense if each feature_id value is associated with a distinct tuple of
-    #  treatment/covariate values unique on each df. How to combine?
-    assert (cell_type_1_df.value_counts(subset='feature_id') == 1).all
-    # assert cell_type_2_df.value_counts(subset='feature_id') == 1
-    merged = cell_type_1_df.merge(cell_type_2_df, on='feature_id', suffixes=('_ct1', '_ct2'), copy=False)
-
-    lfc = np.log(merged['mean_ct2'].values / merged['mean_ct1'].values)
-    log_mean_se_1 = (np.log(merged['mean_ct1'] + merged['sem_ct1']) - np.log(
-        merged['mean_ct1'] - merged['sem_ct1'])) / 2
-    log_mean_se_2 = (np.log(merged['mean_ct2'] + merged['sem_ct2']) - np.log(
-        merged['mean_ct2'] - merged['sem_ct2'])) / 2
-    se_lfc = np.sqrt((log_mean_se_2 ** 2 + log_mean_se_1 ** 2)).values
-    de_pvalues = stats.norm.sf(np.abs(lfc), loc=0, scale=se_lfc) * 2
-
-    dv_lfc = np.log(merged['res_var_ct2'].values / merged['res_var_ct1'].values)
-    se_dv_lfc = np.sqrt((merged['selv_ct1'] ** 2 + merged['selv_ct2'] ** 2)).values
-    dv_pvalues = stats.norm.sf(np.abs(dv_lfc), loc=0, scale=se_dv_lfc) * 2
-
-    cxg_results = pd.DataFrame(
-        zip(
-            merged['feature_id'].values,
-            lfc,
-            se_lfc,
-            de_pvalues,
-            dv_lfc,
-            se_dv_lfc,
-            dv_pvalues),
-        columns=['gene', 'cxg_de_coef', 'cxg_de_se', 'cxg_de_pval', 'cxg_dv_coef', 'cxg_dv_se', 'cxg_dv_pval'])
-    return cxg_results
-
-#
-# This code section is adapted from the notebook hypothesis_test.ipynb:
-#
+    return result
 
 
 def compute_hypothesis_test(cell_counts, design, features, mean, se_mean) -> pd.DataFrame:
@@ -204,9 +128,9 @@ if __name__ == '__main__':
 
     filter_1_arg, filter_2_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:5]
 
-    de_result_1, de_result_2 = run(cube_path_arg, filter_1_arg, filter_2_arg)
+    de_result = run(cube_path_arg, filter_1_arg, filter_2_arg)
 
     # Output DE result
-    print(de_result_1, de_result_2)
+    print(de_result)
     #de_result.to_csv(csv_output_path_arg)
 
