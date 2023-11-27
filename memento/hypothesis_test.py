@@ -16,21 +16,24 @@ DE_VARIABLES = [DE_TREATMENT] + DE_COVARIATES
 
 
 def run(cube_path_: str, filter_: str) -> pd.DataFrame:
-    # Read estimators
-    with tiledb.open(cube_path_, 'r') as estimators:
-        estimators_df = estimators.query(cond=filter_,
-                                         attrs=CUBE_TILEDB_ATTRS_OBS + ['mean', 'sem', 'var', 'selv', 'n_obs']).df[:]
+    estimators_df = query_estimators(cube_path_, filter_)
 
-    # convert Pandas columns to `category`, as memory optimization
-    for name, dtype in zip(estimators_df.columns, estimators_df.dtypes):
-        if dtype == 'object':
-            estimators_df[name] = estimators_df[name].astype('category')
-
-    # the method from hypothesis_test.ipynb
     cell_counts, design, features, mean, se_mean = setup(estimators_df)
     result = compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
 
     return result
+
+
+def query_estimators(cube_path_, filter_) -> pd.DataFrame:
+    with tiledb.open(cube_path_, 'r') as estimators:
+        estimators_df = estimators.query(cond=filter_,
+                                         attrs=CUBE_TILEDB_ATTRS_OBS + ['mean', 'sem', 'var', 'selv', 'n_obs']).df[:]
+
+        # convert Pandas columns to `category`, as memory optimization
+        for name, dtype in zip(estimators_df.columns, estimators_df.dtypes):
+            if dtype == 'object':
+                estimators_df[name] = estimators_df[name].astype('category')
+        return estimators_df
 
 
 def compute_hypothesis_test(cell_counts, design, features, mean, se_mean) -> pd.DataFrame:
@@ -77,15 +80,11 @@ def setup(estimators):
     features = estimators['feature_id'].drop_duplicates().tolist()
     groups = estimators.drop_duplicates(subset='group_name').set_index('group_name')
     design = pd.get_dummies(groups[DE_VARIABLES], drop_first=True).astype(int)
+    cell_counts = groups['n_obs'].sort_index().values
+
     # TODO: Is it valid to aggregate `mean` and `sem` using `mean` func?
     mean = estimators.pivot_table(index='group_name', columns='feature_id', values='mean').fillna(1e-3)
     se_mean = estimators.pivot_table(index='group_name', columns='feature_id', values='sem').fillna(1e-4)
-    cell_counts = groups['n_obs'].sort_index().values
-
-    pd.options.display.max_columns = None
-    print(estimators)
-    print(groups)
-    print(f"estimators len={len(estimators)}, groups len={len(groups)}, cell_counts len={len(cell_counts)}")
 
     return cell_counts, design, features, mean, se_mean
 
@@ -122,6 +121,7 @@ if __name__ == '__main__':
     if len(sys.argv) < 4:
         print('Usage: python hypothesis_test.py <filter_1> <cube_path> <csv_output_path>')
         sys.exit(1)
+
 
     filter_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:4]
 
