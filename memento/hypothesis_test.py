@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import sys
-from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,21 +15,19 @@ DE_COVARIATES = ['dataset_id', 'donor_id', 'assay']
 DE_VARIABLES = [DE_TREATMENT] + DE_COVARIATES
 
 
-def run(cube_path_: str, filter_1: str, filter_2: str) -> Tuple[pd.DataFrame]:
+def run(cube_path_: str, filter_: str) -> pd.DataFrame:
     # Read estimators
     with tiledb.open(cube_path_, 'r') as estimators:
-        ct1_df = estimators.query(cond=filter_1, attrs=CUBE_TILEDB_ATTRS_OBS + ['mean', 'sem', 'var', 'selv', 'n_obs']).df[:]
-        ct2_df = estimators.query(cond=filter_2, attrs=CUBE_TILEDB_ATTRS_OBS + ['mean', 'sem', 'var', 'selv', 'n_obs']).df[:]
+        estimators_df = estimators.query(cond=filter_,
+                                         attrs=CUBE_TILEDB_ATTRS_OBS + ['mean', 'sem', 'var', 'selv', 'n_obs']).df[:]
+
     # convert Pandas columns to `category`, as memory optimization
-    for df in [ct1_df, ct2_df]:
-        for name, dtype in zip(df.columns, df.dtypes):
-            if dtype == 'object':
-                df[name] = df[name].astype('category')
+    for name, dtype in zip(estimators_df.columns, estimators_df.dtypes):
+        if dtype == 'object':
+            estimators_df[name] = estimators_df[name].astype('category')
 
     # the method from hypothesis_test.ipynb
-    # TODO: This method only takes 1 set of cells!?
-    estimators = pd.concat([ct1_df, ct2_df])
-    cell_counts, design, features, mean, se_mean = setup(estimators)
+    cell_counts, design, features, mean, se_mean = setup(estimators_df)
     result = compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
 
     return result
@@ -122,13 +119,13 @@ def de_wls(X, y, n, v):
 # Script entrypoint
 if __name__ == '__main__':
 
-    if len(sys.argv) < 5:
-        print('Usage: python hypothesis_test.py <filter_1> <filter_2> <cube_path> <csv_output_path>')
+    if len(sys.argv) < 4:
+        print('Usage: python hypothesis_test.py <filter_1> <cube_path> <csv_output_path>')
         sys.exit(1)
 
-    filter_1_arg, filter_2_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:5]
+    filter_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:4]
 
-    de_result = run(cube_path_arg, filter_1_arg, filter_2_arg)
+    de_result = run(cube_path_arg, filter_arg)
 
     # Output DE result
     print(de_result)
