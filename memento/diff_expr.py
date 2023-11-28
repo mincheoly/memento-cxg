@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import sys
-from typing import List
+from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -17,11 +17,8 @@ DE_COVARIATES = ['dataset_id', 'donor_id', 'assay']
 
 def run(cube_path_: str, filter_: str) -> pd.DataFrame:
     estimators_df = query_estimators(cube_path_, filter_)
-
-    cell_counts, design, features, mean, se_mean = setup(estimators_df, DE_TREATMENT, DE_COVARIATES)
-    result = compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
-
-    return result
+    cell_counts, design, features, mean, se_mean = setup(estimators_df, DE_TREATMENT)
+    return compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
 
 
 def query_estimators(cube_path_, filter_) -> pd.DataFrame:
@@ -47,47 +44,30 @@ def compute_hypothesis_test(cell_counts, design, features, mean, se_mean) -> pd.
         lm = np.log(m)
         selm = (np.log(m + sem) - np.log(m - sem)) / 2
 
-        coef, z, pv = de_wls(design.values, lm, cell_counts, selm ** 2)
+        coef, z, pv = de_wls(X=design.values, y=lm, n=cell_counts, v=selm ** 2)
         de_result.append((feature, coef, z, pv))
 
     return pd.DataFrame(de_result, columns=['feature_id', 'coef', 'z', 'pval']).set_index('feature_id')
 
 
-# TODO: Validate this refactored code is equivalent; it uses Pandas multi-level indexes
-# def setup(estimators):
-#     features = estimators['feature_id'].drop_duplicates().tolist()
-#
-#     # To create a pivot table, it is necessary to further aggregate the cube on the logical dimensions that are not
-#     # DE_VARIABLES
-#     # TODO: Is it valid to aggregate `mean` and `sem` using `mean` func?
-#     mean = estimators.pivot_table(index=DE_VARIABLES, columns='feature_id', values='mean').fillna(1e-3)
-#     se_mean = estimators.pivot_table(index=DE_VARIABLES, columns='feature_id', values='sem').fillna(1e-4)
-#
-#     groups = estimators.drop_duplicates(DE_VARIABLES).set_index(DE_VARIABLES)
-#     # the non-dupped `n_obs` values in `groups` are okay to use, since it is the same value for every cell of a group
-#     cell_counts = groups['n_obs'].sort_index().values
-#     design = pd.get_dummies(groups, drop_first=True).astype(int)
-#
-#     assert groups.shape[0] == mean.shape[0]
-#
-#     return cell_counts, design, features, mean, se_mean
+def setup(estimators, treatment_variable: str) -> Tuple[np.array, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # make treatment variable be in the first column of the design matrix
+    variables = ([treatment_variable] +
+                 [covariate for covariate in CUBE_LOGICAL_DIMS_OBS if covariate != treatment_variable])
 
-def setup(estimators, treatment: str, covariates: List[str]):
-    variables = [treatment] + covariates
-    assert all([v in CUBE_LOGICAL_DIMS_OBS for v in variables])
+    mean = estimators.pivot_table(index=variables, columns='feature_id', values='mean').fillna(1e-3)
+    se_mean = estimators.pivot_table(index=variables, columns='feature_id', values='sem').fillna(1e-4)
 
-    names = estimators[treatment].copy()
-    for col in covariates:
-        names += '_' + estimators[col]
-    estimators['group_name'] = names.tolist()
+    groups = estimators[variables + ['n_obs']].drop_duplicates(variables)
+    cell_counts = groups['n_obs'].values
+    design = pd.get_dummies(groups[variables], drop_first=True, dtype=int)
+
     features = estimators['feature_id'].drop_duplicates().tolist()
-    groups = estimators.drop_duplicates(subset='group_name').set_index('group_name')
-    design = pd.get_dummies(groups[variables], drop_first=True).astype(int)
-    cell_counts = groups['n_obs'].sort_index().values
 
-    # TODO: Is it valid to aggregate `mean` and `sem` using `mean` func?
-    mean = estimators.pivot_table(index='group_name', columns='feature_id', values='mean').fillna(1e-3)
-    se_mean = estimators.pivot_table(index='group_name', columns='feature_id', values='sem').fillna(1e-4)
+    assert len(cell_counts) == len(groups)
+    assert design.shape[0] == len(groups)
+    assert mean.shape == (len(groups), len(features))
+    assert se_mean.shape == (len(groups), len(features))
 
     return cell_counts, design, features, mean, se_mean
 
@@ -104,7 +84,7 @@ def de_wls(X, y, n, v):
     WLS = LinearRegression()
     WLS.fit(X, y, sample_weight=n)
 
-    # we have all the other coeffs for the other covariates here as well
+    # note: we have all the other coeffs for the other covariates here as well
     treatment_col = 0
     coef = WLS.coef_[treatment_col]
 
@@ -122,7 +102,7 @@ def de_wls(X, y, n, v):
 if __name__ == '__main__':
 
     if len(sys.argv) < 4:
-        print('Usage: python diff_expr.py <filter_1> <cube_path> <csv_output_path>')
+        print('Usage: python diff_expr.py <filter> <cube_path> <csv_output_path>')
         sys.exit(1)
 
     filter_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:4]
@@ -131,5 +111,5 @@ if __name__ == '__main__':
 
     # Output DE result
     print(de_result)
-    #de_result.to_csv(csv_output_path_arg)
+    de_result.to_csv(csv_output_path_arg)
 
