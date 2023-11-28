@@ -9,15 +9,12 @@ import tiledb
 
 from memento.cell_census_summary_cube import CUBE_TILEDB_ATTRS_OBS, CUBE_LOGICAL_DIMS_OBS
 
+
 # Running actual hypothesis test with pre-computed standard errors
 
-DE_TREATMENT = 'cell_type'
-DE_COVARIATES = ['dataset_id', 'donor_id', 'assay']
-
-
-def run(cube_path_: str, filter_: str) -> pd.DataFrame:
+def run(cube_path_: str, filter_: str, treatment: str) -> pd.DataFrame:
     estimators_df = query_estimators(cube_path_, filter_)
-    cell_counts, design, features, mean, se_mean = setup(estimators_df, DE_TREATMENT)
+    cell_counts, design, features, mean, se_mean = setup(estimators_df, treatment)
     return compute_hypothesis_test(cell_counts, design, features[:100], mean, se_mean)
 
 
@@ -104,13 +101,13 @@ def de_wls(X, y, n, v):
 # Script entrypoint
 if __name__ == '__main__':
 
-    if len(sys.argv) < 4:
-        print('Usage: python diff_expr.py <filter> <cube_path> <csv_output_path>')
+    if len(sys.argv) < 5:
+        print('Usage: python diff_expr.py <filter> <treatment> <cube_path> <csv_output_path>')
         sys.exit(1)
 
-    filter_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:4]
+    filter_arg, treatment_arg, cube_path_arg, csv_output_path_arg = sys.argv[1:5]
 
-    de_result = run(cube_path_arg, filter_arg)
+    de_result = run(cube_path_arg, filter_arg, treatment_arg)
 
     # Output DE result
     print(de_result)
