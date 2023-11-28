@@ -25,6 +25,12 @@ def estimators_df(dim_counts: Dict[str, int]) -> pd.DataFrame:
     return estimators
 
 
+@pytest.mark.parametrize("dim_counts", [{"feature_id": 3, "cell_type": 3}])
+def test__setup__too_many_treatment_values__fails(estimators_df: pd.DataFrame):
+    with pytest.raises(AssertionError, match="treatment must have exactly 2 distinct values"):
+        diff_expr.setup(estimators_df, "cell_type")
+
+
 @pytest.mark.parametrize("dim_counts", [{"feature_id": 3, "cell_type": 2, "dataset_id": 3, "assay": 2}])
 def test_setup(estimators_df: pd.DataFrame):
     cell_counts, design, features, mean, se_mean = (

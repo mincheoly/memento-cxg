@@ -51,6 +51,9 @@ def compute_hypothesis_test(cell_counts, design, features, mean, se_mean) -> pd.
 
 
 def setup(estimators, treatment_variable: str) -> Tuple[np.array, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    distinct_treatment_values = estimators[[treatment_variable]].nunique()[0]
+    assert distinct_treatment_values == 2, "treatment must have exactly 2 distinct values"
+
     # make treatment variable be in the first column of the design matrix
     variables = ([treatment_variable] +
                  [covariate for covariate in CUBE_LOGICAL_DIMS_OBS if covariate != treatment_variable])
