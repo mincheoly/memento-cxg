@@ -88,7 +88,10 @@ CUBE_SCHEMA = ArraySchema(
   allows_duplicates=True,
 )
 
-Q = 0.1  # RNA capture efficiency depending on technology
+# RNA capture efficiency depending on technology. Read from the environment because pass 2
+# runs in spawned processes, which re-import this module and so do not see a value assigned
+# on the module object by a caller -- only the environment crosses the process boundary.
+Q = float(os.environ.get("MEMENTO_CUBE_Q", 0.1))
 
 MAX_WORKERS = None  # None means use multiprocessing's dynamic default
 
