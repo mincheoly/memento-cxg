@@ -92,14 +92,17 @@ def compute_variance(X: sparse.csc_matrix, q: float, size_factor: np.array, grou
     mm_M2 = sparse.csc_matrix.dot(row_weight_sq, X.power(2)).ravel() / n_obs - (1 - q) * sparse.csc_matrix.dot(
         row_weight_sq, X).ravel() / n_obs
 
-    mean = mm_M1
-    variance = (mm_M2 - mm_M1 ** 2)
+    # X is a single gene, so the ravelled moments are length-1 arrays. NumPy 2.0 removed
+    # the implicit conversion of a size-1 array to a scalar, so unwrap explicitly --
+    # `float(variance)` on a shape-(1,) array now raises TypeError.
+    mean = float(mm_M1.item())
+    variance = float((mm_M2 - mm_M1 ** 2).item())
 
     if variance < 0:
         logging.warning(f"negative variance ({variance}) for group {group_name}: {X.data}")
         variance = mean
 
-    return float(variance)
+    return variance
 
 
 def compute_bootstrap_variance(
